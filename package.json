@@ -1,0 +1,17 @@
+{
+  "name": "pixelsurf-calc",
+  "version": "0.1.0",
+  "description": "Pixel surf and flashboost/out-of-bounds spot finder for CS:GO maps",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "scan": "node scan.js",
+    "test": "node test/run.js"
+  },
+  "dependencies": {
+    "seek-bzip": "^2.0.0"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0"
+  }
+}

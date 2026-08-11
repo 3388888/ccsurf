@@ -1,0 +1,4 @@
+# Force the GNU toolchain: this machine has no MSVC link.exe, so the default MSVC target
+# fails at link time. Same pin as demo-reader/tauri-app/src-tauri.
+[toolchain]
+channel = "stable-x86_64-pc-windows-gnu"

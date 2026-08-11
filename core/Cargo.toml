@@ -1,0 +1,23 @@
+[package]
+name = "pixelsurf-core"
+version = "0.1.0"
+edition = "2021"
+description = "Pixel surf and out-of-bounds spot finder for CS:GO maps — geometry + movement engine"
+
+[lib]
+name = "pixelsurf_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pixelsurf"
+path = "src/main.rs"
+
+# No dependencies, deliberately — same discipline as native/csgo-rs. Everything here is
+# lump parsing and arithmetic; pulling in a crate graph would cost more than it saves.
+[dependencies]
+
+[profile.release]
+opt-level = 3      # this crate is compute-bound (the Tab 4 search), so speed over size
+lto = true
+strip = true
+codegen-units = 1
