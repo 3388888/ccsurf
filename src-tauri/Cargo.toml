@@ -1,0 +1,18 @@
+[package]
+name = "pixelsurf-calc"
+version = "0.1.0"
+edition = "2021"
+description = "Pixel surf / pixel walk / flashboost spot finder for CS:GO maps — Tauri shell"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# the scanning engine — called in-process, no subprocess
+pixelsurf-core = { path = "../core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

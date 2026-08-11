@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixelsurf Calculator</title>
+<style>
+  :root {
+    --bg: #16181c; --panel: #1e2126; --panel2: #24282e; --line: #33373e;
+    --text: #d6d9de; --dim: #8b929c; --accent: #d2952b; --accent2: #6f9fd8;
+    --good: #7fb069; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    padding: 18px 24px 14px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #1c1f24, #16181c);
+  }
+  h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .3px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--dim); font-size: 12px; margin-top: 3px; }
+  main { padding: 20px 24px 60px; max-width: 1060px; }
+  .controls {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 16px; margin-bottom: 18px;
+  }
+  label { display: block; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .6px; color: var(--dim); margin-bottom: 5px; }
+  input, select {
+    width: 100%; background: var(--panel2); border: 1px solid var(--line);
+    color: var(--text); border-radius: 4px; padding: 7px 9px;
+    font-family: var(--mono); font-size: 14px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .hint { color: var(--dim); font-size: 11px; margin-top: 4px; font-family: var(--mono); }
+  .summary { margin: 0 0 12px; color: var(--dim); font-size: 13px; }
+  .summary b { color: var(--text); font-family: var(--mono); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+    color: var(--dim); font-weight: 500; padding: 8px 10px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg);
+  }
+  td { padding: 7px 10px; border-bottom: 1px solid #23262b; font-family: var(--mono); }
+  tbody tr:hover { background: var(--panel); }
+  .num { text-align: right; }
+  .eye { color: var(--accent); font-weight: 600; font-size: 14px; }
+  .tick64 { color: var(--good); }
+  .tick128 { color: var(--dim); }
+  .crouch { color: var(--accent2); }
+  .walkoff { color: var(--dim); font-style: italic; }
+  .empty { color: var(--dim); padding: 28px 10px; text-align: center; }
+  footer { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line);
+    color: var(--dim); font-size: 12px; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pixelsurf <span>Calculator</span></h1>
+  <div class="sub">Where to stand so a jump lands your feet on a given ledge &mdash; CS:GO / Source 1</div>
+</header>
+
+<main>
+  <div class="controls">
+    <div>
+      <label for="ledge">Ledge height (z)</label>
+      <input id="ledge" type="number" value="1000" step="0.01">
+      <div class="hint">from the wireframe</div>
+    </div>
+    <div>
+      <label for="lo">Search from</label>
+      <input id="lo" type="number" value="940" step="0.01">
+      <div class="hint">lowest stand eye</div>
+    </div>
+    <div>
+      <label for="hi">Search to</label>
+      <input id="hi" type="number" value="1010" step="0.01">
+      <div class="hint">highest stand eye</div>
+    </div>
+    <div>
+      <label for="tick">Tickrate</label>
+      <select id="tick">
+        <option value="0">64 and 128</option>
+        <option value="64">64 only</option>
+        <option value="128">128 only</option>
+      </select>
+      <div class="hint">server rate</div>
+    </div>
+    <div>
+      <label for="players">Max players</label>
+      <select id="players">
+        <option value="1">Solo</option>
+        <option value="2" selected>Up to 2</option>
+        <option value="3">Up to 3</option>
+        <option value="4">Up to 4</option>
+        <option value="5">Up to 5</option>
+      </select>
+      <div class="hint">boost stack size</div>
+    </div>
+  </div>
+
+  <p class="summary" id="summary"></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Boost</th>
+        <th class="num">Stand at (cl_showpos z)</th>
+        <th>Jump</th>
+        <th class="num">Jump height</th>
+        <th>Works on</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <footer>
+    Stand so <code>cl_showpos</code> reads the highlighted z, then jump. Heights are derived
+    from <code>sv_gravity 800</code> and the jump impulse <code>sqrt(2&middot;800&middot;57)</code>,
+    sampled per tick &mdash; not a lookup table. A jump only exists at these discrete heights
+    because the engine moves you once per tick.
+  </footer>
+</main>
+
+<script>
+"use strict";
+// ---- derived jump table (mirrors core/src/jumptable.rs; see that file for the derivation)
+const GRAVITY = 800, JUMP_APEX = 57, JUMP_IMPULSE = Math.sqrt(2 * GRAVITY * JUMP_APEX);
+const DUCK_FEET_GAIN = 9, EYE_STAND = 64.09, EYE_DUCK = 46.07;
+const BOX_STAND = 72.04, BOX_STAND_UPPER = 72.03, BOX_DUCK = 54.04, BOX_DUCK_UPPER = 54.03;
+const APEX_DUP = 0.02;
+const round2 = (x) => Math.floor(x * 100 + 0.5) / 100;
+
+function arc(tickrate) {
+  const dt = 1 / tickrate, out = [];
+  let v = JUMP_IMPULSE, z = 0;
+  for (let n = 0; n < tickrate * 4; n++) {
+    v -= GRAVITY * dt * 0.5; z += v * dt; v -= GRAVITY * dt * 0.5;
+    out.push(z);
+    if (z < 0) break;
+  }
+  return out;
+}
+// At 128 tick the apex is sampled twice within 0.01u — one moment, not two options, so the
+// duplicate goes. At 64 tick the neighbours are ~0.07u apart and both are real, which is why
+// the test is proximity and never index.
+function heights(tickrate) {
+  const a = arc(tickrate);
+  let pk = 0;
+  for (let i = 1; i < a.length; i++) if (a[i] > a[pk]) pk = i;
+  const apex = a[pk];
+  const dup = (pk + 1 < a.length && apex - a[pk + 1] < APEX_DUP) ? pk + 1 : -1;
+  const out = [];
+  for (let i = pk; i < a.length; i++) {
+    if (i === dup) continue;
+    out.push(round2(JUMP_APEX - (apex - a[i])));
+  }
+  return out;
+}
+function table(crouch) {
+  const h128 = heights(128), h64 = heights(64);
+  const lift = crouch ? DUCK_FEET_GAIN : 0;
+  const on64 = (h) => h64.some((x) => Math.abs(x - h) < 0.015);
+  const out = [];
+  for (const h of h128) {
+    if (h < 14) break;
+    out.push({ h: round2(h + lift), t64: on64(h) });
+  }
+  return out;
+}
+const STACKS = [
+  { id:"1man", label:"Solo", players:1, eye:EYE_STAND, drop:0 },
+  { id:"2man", label:"2-man boost", players:2, eye:EYE_STAND, drop:BOX_STAND_UPPER },
+  { id:"2man_wo", label:"2-man walk-off", players:2, eye:EYE_STAND, drop:BOX_STAND, walkoff:true },
+  { id:"2man_wo_c", label:"2-man walk-off (crouched)", players:2, eye:EYE_DUCK, drop:BOX_DUCK_UPPER, walkoff:true },
+  { id:"3man", label:"3-man boost", players:3, eye:EYE_STAND, drop:BOX_STAND_UPPER+BOX_STAND },
+  { id:"3man_1c", label:"3-man (1 crouched)", players:3, eye:EYE_STAND, drop:BOX_STAND_UPPER+BOX_DUCK },
+  { id:"3man_2c", label:"3-man (2 crouched)", players:3, eye:EYE_DUCK, drop:BOX_DUCK_UPPER+BOX_DUCK },
+  { id:"4man", label:"4-man boost", players:4, eye:EYE_STAND, drop:2*BOX_STAND_UPPER+BOX_STAND },
+  { id:"4man_1c", label:"4-man (1 crouched)", players:4, eye:EYE_STAND, drop:2*BOX_STAND_UPPER+BOX_DUCK },
+  { id:"4man_2c", label:"4-man (2 crouched)", players:4, eye:EYE_DUCK, drop:BOX_STAND_UPPER+BOX_DUCK_UPPER+BOX_DUCK },
+  { id:"5man", label:"5-man boost", players:5, eye:EYE_STAND, drop:3*BOX_STAND_UPPER+BOX_STAND },
+  { id:"5man_1c", label:"5-man (1 crouched)", players:5, eye:EYE_STAND, drop:3*BOX_STAND_UPPER+BOX_DUCK },
+  { id:"5man_2c", label:"5-man (2 crouched)", players:5, eye:EYE_DUCK, drop:2*BOX_STAND_UPPER+BOX_DUCK_UPPER+BOX_DUCK },
+];
+function solutions(ledgeZ, min, max, tick, maxPlayers) {
+  const out = [];
+  for (const st of STACKS) {
+    if (st.players > maxPlayers) continue;
+    if (st.walkoff) {
+      const e = round2(ledgeZ + st.eye - st.drop);
+      if (e >= min && e <= max) out.push({ ...st, jump: null, crouch: false, standEye: e, t64: true });
+      continue;
+    }
+    for (const crouch of [false, true]) {
+      for (const j of table(crouch)) {
+        if (tick === 64 && !j.t64) continue;
+        if (tick === 128 && j.t64) continue;
+        const e = round2(ledgeZ + st.eye - j.h - st.drop);
+        if (e < min || e > max) continue;
+        out.push({ ...st, jump: j.h, crouch, standEye: e, t64: j.t64 });
+      }
+    }
+  }
+  out.sort((a, b) => a.players - b.players || (b.jump || 0) - (a.jump || 0));
+  return out;
+}
+
+const $ = (id) => document.getElementById(id);
+function render() {
+  const ledge = parseFloat($("ledge").value);
+  const lo = parseFloat($("lo").value), hi = parseFloat($("hi").value);
+  const tick = parseInt($("tick").value, 10);
+  const maxPlayers = parseInt($("players").value, 10);
+  const rows = $("rows"), summary = $("summary");
+  if (![ledge, lo, hi].every(Number.isFinite)) {
+    rows.innerHTML = ""; summary.textContent = "Enter a ledge height and a search range.";
+    return;
+  }
+  const sols = solutions(ledge, Math.min(lo, hi), Math.max(lo, hi), tick, maxPlayers);
+  summary.innerHTML = `Ledge <b>${ledge.toFixed(2)}</b> &mdash; <b>${sols.length}</b> way${sols.length === 1 ? "" : "s"} in, standing between <b>${Math.min(lo, hi).toFixed(2)}</b> and <b>${Math.max(lo, hi).toFixed(2)}</b>.`;
+  if (!sols.length) {
+    rows.innerHTML = `<tr><td colspan="5" class="empty">Nothing reaches that ledge from this range. Widen the search, allow a bigger stack, or allow 128 tick.</td></tr>`;
+    return;
+  }
+  rows.innerHTML = sols.slice(0, 400).map((s) => {
+    const jumpCell = s.jump === null
+      ? `<span class="walkoff">walk off the head</span>`
+      : (s.crouch ? `<span class="crouch">crouch jump</span>` : `normal jump`);
+    const hCell = s.jump === null ? "&mdash;" : s.jump.toFixed(2) + "u";
+    const tickCell = s.t64
+      ? `<span class="tick64">64 and 128</span>`
+      : `<span class="tick128">128 only</span>`;
+    return `<tr><td>${s.label}</td><td class="num eye">${s.standEye.toFixed(2)}</td>` +
+      `<td>${jumpCell}</td><td class="num">${hCell}</td><td>${tickCell}</td></tr>`;
+  }).join("");
+}
+for (const id of ["ledge", "lo", "hi", "tick", "players"]) {
+  $(id).addEventListener("input", render);
+  $(id).addEventListener("change", render);
+}
+render();
+</script>
+</body>
+</html>

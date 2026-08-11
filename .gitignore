@@ -1,0 +1,22 @@
+# rust
+target/
+**/target/
+Cargo.lock
+
+# tauri generated
+src-tauri/gen/
+src-tauri/target/
+
+# node (the JS reference implementation has no deps, but just in case)
+node_modules/
+
+# editors / os
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+
+# scratch
+*.tmp
+*.log

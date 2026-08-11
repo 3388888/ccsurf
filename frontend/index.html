@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pixelsurf Calc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">Pixelsurf <span>Calc</span></div>
+  <nav>
+    <button class="tab active" data-tab="spots">Map scan</button>
+    <button class="tab" data-tab="calc">Calculator</button>
+  </nav>
+</header>
+
+<!-- ------------------------------------------------------------------ map scan -->
+<section id="tab-spots" class="tab-panel active">
+  <div class="bar">
+    <div class="field grow">
+      <label for="map">Map</label>
+      <input id="map" list="maplist" placeholder="type to filter, e.g. cs_italy" autocomplete="off">
+      <datalist id="maplist"></datalist>
+    </div>
+    <div class="field">
+      <label for="minoob">Min OOB height</label>
+      <input id="minoob" type="number" value="40" step="10" min="0">
+    </div>
+    <div class="field checks">
+      <label><input type="checkbox" id="surf" checked> surf ramps</label>
+      <label><input type="checkbox" id="trim"> trim/sills</label>
+      <label><input type="checkbox" id="ground"> floor</label>
+    </div>
+    <button id="scan" class="primary">Scan</button>
+    <button id="rescan" title="ignore the cache and rebuild">Rescan</button>
+  </div>
+
+  <div id="status" class="status">Pick a map and hit Scan.</div>
+
+  <div id="summary" class="summary hidden">
+    <button class="chip" data-filter="all">All <b>0</b></button>
+    <button class="chip k-oob" data-filter="oob">Out of bounds <b>0</b></button>
+    <button class="chip k-pixelsurf" data-filter="pixelsurf">Pixelsurf <b>0</b></button>
+    <button class="chip k-pixelwalk" data-filter="pixelwalk">Pixelwalk <b>0</b></button>
+    <button class="chip k-surf" data-filter="surf">Surf <b>0</b></button>
+  </div>
+
+  <div id="warn" class="warn hidden"></div>
+
+  <table id="results" class="hidden">
+    <thead><tr>
+      <th>Kind</th><th class="num">X</th><th class="num">Y</th><th class="num">Z</th>
+      <th class="num">Width</th><th class="num">Above</th><th>Why</th><th>Best way in</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="more" class="more hidden"></div>
+</section>
+
+<!-- ----------------------------------------------------------------- calculator -->
+<section id="tab-calc" class="tab-panel">
+  <div class="bar">
+    <div class="field"><label for="ledge">Ledge z</label>
+      <input id="ledge" type="number" value="1000" step="0.01"></div>
+    <div class="field"><label for="lo">From</label>
+      <input id="lo" type="number" value="940" step="0.01"></div>
+    <div class="field"><label for="hi">To</label>
+      <input id="hi" type="number" value="1010" step="0.01"></div>
+    <div class="field"><label for="tick">Tickrate</label>
+      <select id="tick"><option value="0">64 and 128</option><option value="64">64 only</option>
+        <option value="128">128 only</option></select></div>
+    <div class="field"><label for="players">Max players</label>
+      <select id="players"><option value="1">Solo</option><option value="2" selected>Up to 2</option>
+        <option value="3">Up to 3</option><option value="4">Up to 4</option>
+        <option value="5">Up to 5</option></select></div>
+  </div>
+  <div id="calcsum" class="status"></div>
+  <table>
+    <thead><tr><th>Boost</th><th class="num">Stand at (cl_showpos z)</th><th>Jump</th>
+      <th class="num">Height</th><th>Works on</th></tr></thead>
+    <tbody id="calcrows"></tbody>
+  </table>
+</section>
+
+<script src="jumptable.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
