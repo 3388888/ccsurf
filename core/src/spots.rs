@@ -64,6 +64,9 @@ pub struct Spot {
     /// i.e. an invisible ledge.
     pub is_clip: bool,
     pub is_disp: bool,
+    /// The standing hull doesn't clear here but the ducked one does — you have to hold
+    /// crouch to stay on it.
+    pub duck_only: bool,
     /// False when the reachability fill never got here: a boost/flashboost candidate.
     pub reachable: bool,
     /// How far above the nearest reachable surface below it. The number that says whether
@@ -234,6 +237,77 @@ pub fn classify_patch(p: &Patch) -> Kind {
     }
 }
 
+// ---------------------------------------------------------------- hull clearance
+//
+// An upward-facing surface is not a spot unless a player actually FITS on it. Without this
+// test, every ledge with a wall or ceiling right above it gets reported — which is most of
+// them, and is why a raw scan of cs_italy returns thousands of "pixelwalks" that you could
+// never stand on. Reporting a candidate the user has to go and disprove in-game is worse
+// than not reporting it.
+//
+// The test is the engine's own: place the player AABB with its feet on the surface and see
+// if it intersects anything player-solid. Standing is 32x32x72; if that fails, try the 54u
+// ducked hull, because plenty of real spots are crouch-only.
+
+/// Start the hull just above the surface — the surface is itself the top of a brush, so a
+/// hull resting exactly on it always "touches" the brush it is standing on.
+const FOOT_EPS: f64 = 0.25;
+/// Ignore grazing contact; brush faces meet at shared planes and f32 coordinates wobble.
+const OVERLAP_EPS: f64 = 0.5;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fit { Standing, DuckOnly, Blocked }
+
+/// Uniform grid over solid AABBs, so a clearance test doesn't scan every brush on the map.
+struct SolidGrid { cell: f64, min: [f64; 2], w: usize, h: usize, buckets: Vec<Vec<u32>> }
+
+impl SolidGrid {
+    fn build(solids: &[crate::collide::Aabb], cell: f64) -> SolidGrid {
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for s in solids {
+            for k in 0..2 { lo[k] = lo[k].min(s.min[k]); hi[k] = hi[k].max(s.max[k]); }
+        }
+        if solids.is_empty() { lo = [0.0; 2]; hi = [0.0; 2]; }
+        let w = (((hi[0] - lo[0]) / cell).ceil() as usize + 1).max(1);
+        let h = (((hi[1] - lo[1]) / cell).ceil() as usize + 1).max(1);
+        let mut g = SolidGrid { cell, min: lo, w, h, buckets: vec![Vec::new(); w * h] };
+        for (i, s) in solids.iter().enumerate() {
+            let (x0, x1) = (g.cx(s.min[0]), g.cx(s.max[0]));
+            let (y0, y1) = (g.cy(s.min[1]), g.cy(s.max[1]));
+            for cy in y0..=y1 { for cx in x0..=x1 { g.buckets[cy * g.w + cx].push(i as u32); } }
+        }
+        g
+    }
+    fn cx(&self, x: f64) -> usize { (((x - self.min[0]) / self.cell).max(0.0) as usize).min(self.w - 1) }
+    fn cy(&self, y: f64) -> usize { (((y - self.min[1]) / self.cell).max(0.0) as usize).min(self.h - 1) }
+
+    /// Does a 32x32x`height` box with its feet at `z` clear everything player-solid?
+    fn clear(&self, solids: &[crate::collide::Aabb], x: f64, y: f64, z: f64, height: f64) -> bool {
+        let half = HULL_WIDTH / 2.0;
+        let (lo, hi) = ([x - half, y - half, z + FOOT_EPS], [x + half, y + half, z + height]);
+        let (x0, x1) = (self.cx(lo[0]), self.cx(hi[0]));
+        let (y0, y1) = (self.cy(lo[1]), self.cy(hi[1]));
+        for cy in y0..=y1 {
+            for cx in x0..=x1 {
+                for &i in &self.buckets[cy * self.w + cx] {
+                    let s = &solids[i as usize];
+                    let overlaps = (0..3).all(|k| {
+                        lo[k] < s.max[k] - OVERLAP_EPS && s.min[k] < hi[k] - OVERLAP_EPS
+                    });
+                    if overlaps { return false; }
+                }
+            }
+        }
+        true
+    }
+
+    fn fit(&self, solids: &[crate::collide::Aabb], x: f64, y: f64, z: f64) -> Fit {
+        if self.clear(solids, x, y, z, HULL_H_STAND) { Fit::Standing }
+        else if self.clear(solids, x, y, z, HULL_H_DUCK) { Fit::DuckOnly }
+        else { Fit::Blocked }
+    }
+}
+
 /// Uniform grid over the XY plane so neighbour lookups aren't O(n^2).
 struct Grid { cell: f64, min: [f64; 2], w: usize, h: usize, buckets: Vec<Vec<u32>> }
 
@@ -290,7 +364,14 @@ impl Default for ScanOptions {
     }
 }
 
-pub fn scan(geo: &Geometry, opts: &ScanOptions) -> Vec<Spot> {
+pub struct ScanResult {
+    pub spots: Vec<Spot>,
+    /// Candidates rejected because no player hull fits — reported so the filtering is
+    /// auditable rather than silently swallowing surfaces.
+    pub blocked: usize,
+}
+
+pub fn scan(geo: &Geometry, opts: &ScanOptions) -> ScanResult {
     // Merge first: raw BSP faces are fragments, patches are surfaces. Classifying fragments
     // turns one wall top into hundreds of "ledges".
     let patches = merge_patches(&geo.faces);
@@ -363,6 +444,8 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> Vec<Spot> {
     }
 
     // ---- highest reachable surface beneath each face, for ranking the out-of-bounds ones
+    let solid_grid = SolidGrid::build(&geo.solids, 256.0);
+    let mut blocked = 0usize;
     let mut out = Vec::new();
     let mut below: Vec<u32> = Vec::new();
     for i in 0..n {
@@ -370,6 +453,13 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> Vec<Spot> {
         if kind == Kind::Ground && !opts.include_ground { continue; }
         if kind == Kind::Surf && (!opts.include_surf || patches[i].area < MIN_SURF_AREA) { continue; }
         if trim[i] && !opts.include_trim { continue; }
+
+        // Can a player actually stand here? A ledge with a wall or ceiling over it is not a
+        // spot no matter how inviting the surface looks. Surf ramps are exempt: you ride
+        // those moving, not from a standing hull position.
+        let fit = if kind == Kind::Surf { Fit::Standing }
+                  else { solid_grid.fit(&geo.solids, centroids[i][0], centroids[i][1], centroids[i][2]) };
+        if fit == Fit::Blocked { blocked += 1; continue; }
 
         let f = &patches[i];
         let c = centroids[i];
@@ -417,6 +507,7 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> Vec<Spot> {
             slope_deg: f.n[2].clamp(-1.0, 1.0).acos().to_degrees(),
             is_clip,
             is_disp: f.is_disp,
+            duck_only: fit == Fit::DuckOnly,
             reachable: reachable[i],
             height_above_reachable: if height_above.is_finite() { height_above } else { -1.0 },
             oob_class,
@@ -430,7 +521,7 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> Vec<Spot> {
             .then(b.height_above_reachable.partial_cmp(&a.height_above_reachable).unwrap())
             .then(a.width.partial_cmp(&b.width).unwrap())
     });
-    out
+    ScanResult { spots: out, blocked }
 }
 
 #[cfg(test)]

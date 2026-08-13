@@ -133,15 +133,20 @@ fn print_scan(name: &str, opts: &ScanOptions, force: bool, top: usize) {
     let geo = match pixelsurf_core::collide::extract(&path) {
         Ok(g) => g, Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
     };
-    let found = spots::scan(&geo, opts);
+    let res = spots::scan(&geo, opts);
+    let found = &res.spots;
     let _ = force;
 
     let count = |k: Kind| found.iter().filter(|x| x.kind == k).count();
     let oob: Vec<_> = found.iter().filter(|x| !x.reachable).collect();
 
+    // Print the actual file. Several games ship a cs_italy, and which one you get depends on
+    // folder order — without this the header silently changes map underneath you.
     println!("\n{name}  (bsp v{}, {} spawns)", geo.version, geo.spawns.len());
+    println!("  {}", path.display());
     println!("  pixelsurf {}   pixelwalk {}   surf {}   out-of-bounds {}",
         count(Kind::PixelSurf), count(Kind::PixelWalk), count(Kind::Surf), oob.len());
+    println!("  rejected {} surfaces where no player hull fits (wall or ceiling in the way)", res.blocked);
     println!("  NOT SCANNED: static prop collision (.phy) — spots on crates, awnings and pipes are missing.");
 
     if !oob.is_empty() {

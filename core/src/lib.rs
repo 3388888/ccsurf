@@ -35,15 +35,16 @@ pub fn scan_map(name: &str, opts: &ScanOptions, force: bool) -> Result<String, S
 
     let t0 = std::time::Instant::now();
     let geo = collide::extract(&path)?;
-    let found = spots::scan(&geo, opts);
+    let res = spots::scan(&geo, opts);
+    let found = &res.spots;
     let ms = t0.elapsed().as_millis();
 
-    let json = to_json(name, &geo, &found, ms);
+    let json = to_json(name, &geo, found, res.blocked, ms);
     maps::store(name, &sig, &json);
     Ok(json)
 }
 
-fn to_json(name: &str, geo: &collide::Geometry, found: &[spots::Spot], ms: u128) -> String {
+fn to_json(name: &str, geo: &collide::Geometry, found: &[spots::Spot], blocked: usize, ms: u128) -> String {
     use maps::{esc, num};
     let mut s = String::with_capacity(found.len() * 220 + 512);
 
@@ -52,13 +53,13 @@ fn to_json(name: &str, geo: &collide::Geometry, found: &[spots::Spot], ms: u128)
 
     s.push_str(&format!(
         "{{\"map\":\"{}\",\"bspVersion\":{},\"scanMs\":{},\
-         \"counts\":{{\"total\":{},\"pixelsurf\":{},\"pixelwalk\":{},\"surf\":{},\"ground\":{},\"outOfBounds\":{}}},\
+         \"counts\":{{\"total\":{},\"pixelsurf\":{},\"pixelwalk\":{},\"surf\":{},\"ground\":{},\"outOfBounds\":{},\"blockedNoHullFit\":{}}},\
          \"stats\":{{\"brushes\":{},\"brushesSolid\":{},\"brushesKept\":{},\"upFaces\":{},\"dispFaces\":{},\
          \"unbounded\":{},\"movingBrushEnts\":{},\"spawns\":{}}},\
          \"propsScanned\":{},\
          \"limitations\":[\"static prop collision (.phy) is not read - spots on crates, awnings and pipes are NOT found\"",
         esc(name), geo.version, ms,
-        found.len(), count(Kind::PixelSurf), count(Kind::PixelWalk), count(Kind::Surf), count(Kind::Ground), oob,
+        found.len(), count(Kind::PixelSurf), count(Kind::PixelWalk), count(Kind::Surf), count(Kind::Ground), oob, blocked,
         geo.stats.brushes, geo.stats.brushes_solid, geo.stats.brushes_kept,
         geo.stats.up_faces, geo.stats.disp_faces, geo.stats.unbounded,
         geo.stats.moving_brush_ents, geo.spawns.len(),
@@ -73,11 +74,11 @@ fn to_json(name: &str, geo: &collide::Geometry, found: &[spots::Spot], ms: u128)
         if i > 0 { s.push(','); }
         s.push_str(&format!(
             "{{\"kind\":\"{}\",\"x\":{},\"y\":{},\"z\":{},\"eyeZ\":{},\"width\":{},\"area\":{},\
-             \"slopeDeg\":{},\"isClip\":{},\"isDisp\":{},\"reachable\":{},\"heightAboveReachable\":{}",
+             \"slopeDeg\":{},\"isClip\":{},\"isDisp\":{},\"duckOnly\":{},\"reachable\":{},\"heightAboveReachable\":{}",
             sp.kind.as_str(),
             num(sp.pos[0], 2), num(sp.pos[1], 2), num(sp.pos[2], 2), num(sp.eye_z, 2),
             num(sp.width, 2), num(sp.area, 1), num(sp.slope_deg, 1),
-            sp.is_clip, sp.is_disp, sp.reachable,
+            sp.is_clip, sp.is_disp, sp.duck_only, sp.reachable,
             if sp.height_above_reachable < 0.0 { "null".into() } else { num(sp.height_above_reachable, 1) }));
         if let Some(c) = sp.oob_class { s.push_str(&format!(",\"oobClass\":\"{c}\"")); }
         s.push_str(",\"entries\":[");
