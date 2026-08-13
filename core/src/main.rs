@@ -10,7 +10,11 @@ fn usage() -> ! {
 "pixelsurf — CS:GO pixel surf / pixel walk / boost spot finder
 
   pixelsurf maps
-        list every map found on disk
+        list every map found on disk (Steam libraries are read from Steam's own index,
+        so any drive works)
+
+  pixelsurf add-dir <path>
+        add your own maps folder, remembered for next time
 
   pixelsurf scan <map> [--ground] [--no-surf] [--min-oob N] [--json] [--force] [--top N]
         scan a whole map for pixel surfs, pixel walks, surf ramps and out-of-bounds spots
@@ -39,12 +43,14 @@ fn main() {
         "maps" => {
             let dirs = maps::map_dirs();
             if dirs.is_empty() {
-                eprintln!("no maps folder found. Set PIXELSURF_MAPS to a folder containing .bsp files.");
+                eprintln!("No maps folder found.\n\
+                    Point it at yours:  pixelsurf add-dir \"D:\\path\\to\\csgo\\maps\"\n\
+                    or set PIXELSURF_MAPS (';'-separated).");
                 std::process::exit(1);
             }
             for d in &dirs { eprintln!("searching {}", d.display()); }
             let list = maps::list_maps(&dirs);
-            eprintln!("{} maps:\n", list.len());
+            eprintln!("{} maps  (add a folder with: pixelsurf add-dir <path>)\n", list.len());
             for m in list { println!("{m}"); }
         }
 
@@ -92,6 +98,20 @@ fn main() {
             for j in jumptable::table(crouch, 14.0) {
                 println!("  {:>6.2}u   {}", j.h,
                     if j.tickrates.contains(&64) { "64 + 128" } else { "128 only" });
+            }
+        }
+
+        "add-dir" => {
+            let Some(dir) = args.get(1) else {
+                eprintln!("usage: pixelsurf add-dir <folder containing .bsp files>");
+                eprintln!("config: {}", maps::config_path().display());
+                for d in maps::configured_dirs() { eprintln!("  {}", d.display()); }
+                std::process::exit(2);
+            };
+            match maps::add_map_dir(dir) {
+                Ok(true) => println!("added {dir}\nsaved to {}", maps::config_path().display()),
+                Ok(false) => println!("{dir} was already configured"),
+                Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
             }
         }
 

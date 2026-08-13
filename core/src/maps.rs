@@ -12,24 +12,160 @@ use std::path::{Path, PathBuf};
 /// rather than silently served.
 pub const CACHE_VERSION: u32 = 1;
 
-/// Where CS:GO / Classic Counter keep their maps. Checked in order; all that exist are used.
-pub fn map_dirs() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut add = |p: PathBuf| { if p.is_dir() && !out.contains(&p) { out.push(p); } };
+/// Game folders to look for inside any Steam library, as (app folder, maps subpath).
+const GAME_DIRS: &[(&str, &str)] = &[
+    ("Counter-Strike Global Offensive", "csgo/maps"),
+    ("Counter-Strike Source", "cstrike/maps"),
+    ("Half-Life 2", "hl2/maps"),
+];
 
-    if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
-        add(home.join("Desktop/ClassicCounter/csgo/maps"));
+/// Ask Windows where Steam is installed. Uses reg.exe rather than a registry crate so the
+/// crate stays dependency-free; a missing key or a non-Windows host just yields nothing.
+fn steam_root_from_registry() -> Option<PathBuf> {
+    for (hive, key) in [("HKCU", r"Software\Valve\Steam"), ("HKLM", r"SOFTWARE\WOW6432Node\Valve\Steam")] {
+        let value = if hive == "HKCU" { "SteamPath" } else { "InstallPath" };
+        let out = std::process::Command::new("reg")
+            .args(["query", &format!("{hive}\\{key}"), "/v", value])
+            .output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if !line.contains(value) { continue; }
+            // "    SteamPath    REG_SZ    C:\Program Files (x86)\Steam"
+            if let Some(idx) = line.find("REG_SZ") {
+                let p = line[idx + 6..].trim();
+                if !p.is_empty() { return Some(PathBuf::from(p.replace('/', "\\"))); }
+            }
+        }
     }
-    for base in ["C:/Program Files (x86)/Steam/steamapps/common",
-                 "C:/Program Files/Steam/steamapps/common", "D:/Steam/steamapps/common"] {
-        let b = Path::new(base);
-        add(b.join("Counter-Strike Global Offensive/csgo/maps"));
-        add(b.join("Counter-Strike Source/cstrike/maps"));
+    None
+}
+
+/// Every Steam library folder, read from Steam's own index.
+///
+/// This is the part that matters for other people: `libraryfolders.vdf` lists every library
+/// Steam knows about, on every drive, so a user with the game on D:\SteamLibrary is found
+/// without guessing. Parsed by hand — the file is a simple quoted key/value tree and pulling
+/// in a VDF crate for one field would not be worth it.
+fn steam_libraries() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut push = |p: PathBuf| { if p.is_dir() && !roots.contains(&p) { roots.push(p); } };
+
+    if let Some(r) = steam_root_from_registry() { push(r); }
+    for p in ["C:/Program Files (x86)/Steam", "C:/Program Files/Steam"] { push(PathBuf::from(p)); }
+    // last resort: Steam parked on another drive without a registry entry
+    for d in 'C'..='Z' {
+        for suffix in ["Steam", "SteamLibrary", "Games/Steam"] {
+            push(PathBuf::from(format!("{d}:/{suffix}")));
+        }
     }
+
+    let mut libs = Vec::new();
+    let mut add_lib = |p: PathBuf| { if p.is_dir() && !libs.contains(&p) { libs.push(p); } };
+    for root in &roots {
+        add_lib(root.clone());
+        // libraryfolders.vdf moved between Steam versions; try both homes
+        for rel in ["steamapps/libraryfolders.vdf", "config/libraryfolders.vdf"] {
+            let Ok(text) = fs::read_to_string(root.join(rel)) else { continue };
+            for line in text.lines() {
+                let t = line.trim();
+                // entries look like:   "path"    "D:\\SteamLibrary"
+                if !t.starts_with("\"path\"") { continue; }
+                let mut parts = t.split('"').filter(|s| !s.trim().is_empty());
+                let (_, val) = (parts.next(), parts.next());
+                if let Some(v) = val {
+                    let cleaned = v.trim().replace("\\\\", "\\");
+                    if !cleaned.is_empty() { add_lib(PathBuf::from(cleaned)); }
+                }
+            }
+        }
+    }
+    libs
+}
+
+/// Where CS:GO / CS:S / Classic Counter keep their maps.
+///
+/// Order: user-configured folders first (they win), then every Steam library Steam itself
+/// knows about, then non-Steam installs like Classic Counter. Nothing here is specific to one
+/// machine — the previous version hardcoded a Desktop path and three Steam roots, which found
+/// nothing for anyone whose setup differed.
+pub fn map_dirs() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    // Windows paths are case-insensitive and the registry hands back a different casing than
+    // the literal fallbacks, so a plain contains() lets the same folder in twice — which then
+    // scans it twice and double-lists every map in it.
+    let add = |out: &mut Vec<PathBuf>, p: PathBuf| {
+        if !p.is_dir() { return; }
+        let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+        let key = canon.to_string_lossy().to_lowercase().replace('/', "\\");
+        let dup = out.iter().any(|q| {
+            let qc = q.canonicalize().unwrap_or_else(|_| q.clone());
+            qc.to_string_lossy().to_lowercase().replace('/', "\\") == key
+        });
+        if !dup { out.push(p); }
+    };
+
+    // 1. explicit config — the escape hatch for anything the search misses
+    for p in configured_dirs() { add(&mut out, p); }
     if let Ok(extra) = std::env::var("PIXELSURF_MAPS") {
-        for p in extra.split(';').filter(|s| !s.is_empty()) { add(PathBuf::from(p)); }
+        for p in extra.split(';').filter(|s| !s.trim().is_empty()) {
+            add(&mut out, PathBuf::from(p.trim()));
+        }
     }
+
+    // 2. every Steam library, from Steam's own index
+    for lib in steam_libraries() {
+        for (game, maps) in GAME_DIRS {
+            add(&mut out, lib.join("steamapps/common").join(game).join(maps));
+        }
+    }
+
+    // 3. non-Steam installs (Classic Counter and friends) in the usual places
+    let mut bases: Vec<PathBuf> = Vec::new();
+    for var in ["USERPROFILE", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
+        if let Some(v) = std::env::var_os(var) {
+            let b = PathBuf::from(v);
+            bases.push(b.clone());
+            bases.push(b.join("Desktop"));
+            bases.push(b.join("Downloads"));
+        }
+    }
+    for d in 'C'..='Z' { bases.push(PathBuf::from(format!("{d}:/"))); bases.push(PathBuf::from(format!("{d}:/Games"))); }
+    for b in bases {
+        for name in ["ClassicCounter", "cc", "csgo"] {
+            add(&mut out, b.join(name).join("csgo/maps"));
+        }
+    }
+
     out
+}
+
+// ---------------------------------------------------------------- user config
+
+pub fn config_path() -> PathBuf { cache_dir().parent().unwrap_or(&cache_dir()).join("mapdirs.txt") }
+
+/// Extra folders the user pointed us at, one per line. Blank lines and `#` comments ignored.
+pub fn configured_dirs() -> Vec<PathBuf> {
+    let Ok(text) = fs::read_to_string(config_path()) else { return Vec::new() };
+    text.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Remember a folder so it is searched from now on. Returns whether it was actually added.
+pub fn add_map_dir(dir: &str) -> Result<bool, String> {
+    let p = PathBuf::from(dir.trim());
+    if !p.is_dir() { return Err(format!("not a folder: {}", p.display())); }
+    let mut dirs = configured_dirs();
+    if dirs.contains(&p) { return Ok(false); }
+    dirs.push(p);
+    let path = config_path();
+    if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    let body = dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join("\n");
+    fs::write(&path, format!("# Extra maps folders for Pixelsurf Calc, one per line.\n{body}\n"))
+        .map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// Every map name available across the search dirs, sorted and de-duplicated.

@@ -100,13 +100,18 @@ edges — thousands per map), `--no-surf`, `--min-oob N` (default 40u).
 
 ### Where maps are found
 
-Checked in order, all that exist are used:
+Nothing is tied to one machine's layout. In order:
 
-- `%USERPROFILE%\Desktop\ClassicCounter\csgo\maps`
-- `…\Steam\steamapps\common\Counter-Strike Global Offensive\csgo\maps`
-- `…\Steam\steamapps\common\Counter-Strike Source\cstrike\maps`
+1. **Folders you added yourself** — `pixelsurf add-dir "D:\path\to\csgo\maps"`, remembered in
+   `%LOCALAPPDATA%\pixelsurf-calc\mapdirs.txt`. The `PIXELSURF_MAPS` environment variable
+   (`;`-separated) works too.
+2. **Every Steam library** — Steam's install path comes from the registry, then its own
+   `libraryfolders.vdf` is parsed for the rest. This is what matters if your games sit on a
+   second drive: Steam tells us where its libraries are instead of us guessing. CS:GO, CS:S
+   and HL2 map folders are all picked up.
+3. **Non-Steam installs** (Classic Counter and similar) in the usual places on every drive.
 
-Override or extend with the `PIXELSURF_MAPS` environment variable (`;`-separated).
+If `pixelsurf maps` still finds nothing, use `add-dir` — it always wins.
 
 ### Caching
 

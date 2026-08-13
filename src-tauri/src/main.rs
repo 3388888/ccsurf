@@ -9,8 +9,8 @@ use pixelsurf_core::{maps, scan_map, spots::ScanOptions};
 fn list_maps() -> Result<Vec<String>, String> {
     let dirs = maps::map_dirs();
     if dirs.is_empty() {
-        return Err("No maps folder found. Set the PIXELSURF_MAPS environment variable to a \
-                    folder containing .bsp files, then restart.".into());
+        return Err("No maps folder found. Use \"Add folder\" and point it at your \
+                    csgo/maps (or cstrike/maps) directory.".into());
     }
     Ok(maps::list_maps(&dirs))
 }
@@ -18,6 +18,12 @@ fn list_maps() -> Result<Vec<String>, String> {
 #[tauri::command]
 fn map_folders() -> Vec<String> {
     maps::map_dirs().iter().map(|p| p.display().to_string()).collect()
+}
+
+/// Remember an extra maps folder — the escape hatch for installs the search doesn't find.
+#[tauri::command]
+fn add_map_dir(dir: String) -> Result<bool, String> {
+    maps::add_map_dir(&dir)
 }
 
 /// Scan a map. Cached per .bsp, so repeat calls for the same map return instantly.
@@ -36,7 +42,7 @@ fn clear_cache() -> Result<String, String> {
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_maps, map_folders, scan, clear_cache])
+        .invoke_handler(tauri::generate_handler![list_maps, map_folders, add_map_dir, scan, clear_cache])
         .run(tauri::generate_context!())
         .expect("failed to start Pixelsurf Calc");
 }
