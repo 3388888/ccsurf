@@ -115,6 +115,30 @@ fn main() {
             }
         }
 
+        "view" => {
+            let Some(name) = args.get(1).filter(|s| !s.starts_with("--")) else { usage() };
+            let opts = ScanOptions {
+                include_ground: has("--ground"),
+                include_surf: !has("--no-surf"),
+                include_trim: has("--trim"),
+                min_oob_height: val("--min-oob").unwrap_or(40.0),
+            };
+            let out = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1))
+                .cloned().unwrap_or_else(|| format!("{name}.html"));
+            match pixelsurf_core::build_viewer(name, &opts) {
+                Ok((html, tris, spots)) => {
+                    if let Err(e) = std::fs::write(&out, html) {
+                        eprintln!("could not write {out}: {e}");
+                        std::process::exit(1);
+                    }
+                    let kb = std::fs::metadata(&out).map(|m| m.len() / 1024).unwrap_or(0);
+                    println!("wrote {out}  ({tris} triangles, {spots} spots, {kb} KB)");
+                    println!("open it in a browser — no server needed");
+                }
+                Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
+            }
+        }
+
         "clear-cache" => {
             match maps::clear_cache() {
                 Ok(()) => println!("cache cleared ({})", maps::cache_dir().display()),

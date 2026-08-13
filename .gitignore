@@ -20,3 +20,9 @@ Thumbs.db
 # scratch
 *.tmp
 *.log
+# generated viewers
+*_viewer.html
+cs_*.html
+de_*.html
+ar_*.html
+*.html.bak

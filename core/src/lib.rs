@@ -15,6 +15,7 @@ pub mod collide;
 pub mod consts;
 pub mod jumptable;
 pub mod maps;
+pub mod render;
 pub mod spots;
 
 use spots::{Kind, ScanOptions};
@@ -94,4 +95,50 @@ fn to_json(name: &str, geo: &collide::Geometry, found: &[spots::Spot], blocked: 
     }
     s.push_str("]}");
     s
+}
+
+// ---------------------------------------------------------------- 3D viewer
+
+/// Base64, hand-rolled to keep the crate dependency-free.
+fn b64(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for c in data.chunks(3) {
+        let b = [c[0], *c.get(1).unwrap_or(&0), *c.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(if c.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if c.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// Build a standalone HTML viewer for a map: the geometry and the spot list are embedded, so
+/// the file opens by double-click with no server, no toolchain and no Tauri.
+pub fn build_viewer(name: &str, opts: &ScanOptions) -> Result<(String, usize, usize), String> {
+    let dirs = maps::map_dirs();
+    let Some(path) = maps::find_bsp(name, &dirs) else {
+        return Err(format!("map \"{name}\" not found in any maps folder"));
+    };
+    let mesh = render::extract(&path)?;
+    let geo = collide::extract(&path)?;
+    let res = spots::scan(&geo, opts);
+
+    // i16 little-endian, which is what the page reinterprets as an Int16Array
+    let mut bytes = Vec::with_capacity(mesh.pos.len() * 2);
+    for v in &mesh.pos { bytes.extend_from_slice(&v.to_le_bytes()); }
+
+    let spots_json = {
+        let full = to_json(name, &geo, &res.spots, res.blocked, 0);
+        // the page only wants the spots array
+        let start = full.find("\"spots\":[").map(|i| i + 8).unwrap_or(0);
+        full[start..full.len().saturating_sub(1)].to_string()
+    };
+
+    let html = include_str!("../../frontend/viewer_template.html")
+        .replace("__MAP__", &maps::esc(name))
+        .replace("__GEO__", &b64(&bytes))
+        .replace("__SPOTS__", &spots_json);
+    Ok((html, mesh.tri_count, res.spots.len()))
 }

@@ -11,6 +11,7 @@ pub mod lump {
     pub const ENTITIES: usize = 0;
     pub const PLANES: usize = 1;
     pub const VERTEXES: usize = 3;
+    pub const TEXINFO: usize = 6;
     pub const FACES: usize = 7;
     pub const EDGES: usize = 12;
     pub const SURFEDGES: usize = 13;
