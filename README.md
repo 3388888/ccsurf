@@ -75,6 +75,25 @@ cd src-tauri
 cargo run --release
 ```
 
+### Running it — WebView2
+
+The GUI renders through the **Microsoft Edge WebView2 runtime** rather than shipping its own
+browser. That is why the app is a few MB instead of a few hundred, but it means the runtime
+has to be present.
+
+- **Windows 11, and most updated Windows 10:** already installed, nothing to do.
+- **Older Windows 10:** not installed. The app will tell you and exit rather than dying
+  silently.
+
+The installer installs it for you. If you are running the raw `.exe` out of `target/release`:
+
+```bash
+winget install Microsoft.EdgeWebView2Runtime
+```
+
+or grab the Evergreen Standalone Installer from
+<https://developer.microsoft.com/microsoft-edge/webview2/>.
+
 > **Known failure.** If you see `dlltool.exe: CreateProcess` or
 > `link.exe not found`, you have Rust but no C toolchain — that is exactly the case above.
 > rustup's `self-contained` folder ships `dlltool` *without* the GNU assembler it shells out
