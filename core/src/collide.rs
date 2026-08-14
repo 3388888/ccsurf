@@ -5,9 +5,14 @@
 //! rebuilt as a convex polyhedron from its own side planes (clip a huge seed quad against
 //! every other plane) and kept at full float precision — no quantisation anywhere.
 //!
-//! Only UPWARD-facing polygons are kept: you cannot stand or surf on a wall or a ceiling, and
-//! keeping them would multiply the output for no gain. Headroom and reachability queries use
-//! the compact per-brush AABB list in `solids` instead.
+//! Only polygons with an upward component are kept: a ceiling or a perfectly vertical wall
+//! holds nobody, and keeping them would multiply the output for no gain. Headroom and
+//! reachability queries use the compact per-brush AABB list in `solids` instead.
+//!
+//! The threshold has to be tiny. It was 0.01 and that was too coarse: a wall surf rides a
+//! near-vertical face whose normal barely tilts up, so the known de_vertigo_2019 surf at
+//! roughly (-2203, 185, 11776) was discarded before it ever reached classification. Anything
+//! with a positive normal.z can in principle be ridden.
 //!
 //! NOT HANDLED: static prop collision (.phy inside the VPKs). Prop-mounted spots are
 //! invisible here — `Geometry::props_scanned` is always false so callers can say so out loud
@@ -32,6 +37,9 @@ const FACE_SIZE: usize = 56;
 /// Source's world extent; the seed polygon must comfortably exceed it.
 const MAX_COORD: f64 = 32768.0;
 const CLIP_EPS: f64 = 0.01;
+/// Smallest upward tilt worth keeping. Exactly-vertical faces (normal.z == 0) hold nobody, so
+/// they still go, but anything above this can be surfed.
+const MIN_UP_Z: f64 = 0.0005;
 
 pub type P3 = [f64; 3];
 
@@ -278,7 +286,7 @@ pub fn extract(path: &Path) -> Result<Geometry, String> {
             for p in &poly {
                 for k in 0..3 { amin[k] = amin[k].min(p[k]); amax[k] = amax[k].max(p[k]); }
             }
-            if pn[pi][2] <= 0.01 { continue; }          // upward-facing only
+            if pn[pi][2] <= MIN_UP_Z { continue; }      // needs some upward tilt to hold anyone
             if poly_area(&poly, pn[pi]) < MIN_AREA { stats.degenerate += 1; continue; }
             faces.push(Face { n: pn[pi], d: pd[pi], poly, contents, is_disp: false });
         }
@@ -403,7 +411,7 @@ fn extract_displacements(bsp: &mut Bsp, min_area: f64) -> Result<Vec<Face>, Stri
                     let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
                     if len < 1e-6 { continue; }
                     for k in 0..3 { n[k] /= len; }
-                    if n[2] <= 0.01 { continue; }        // upward-facing only, same as brushes
+                    if n[2] <= MIN_UP_Z { continue; }    // same rule as brushes
                     if len / 2.0 < min_area { continue; }
                     let d = tri[0][0] * n[0] + tri[0][1] * n[1] + tri[0][2] * n[2];
                     out.push(Face { n, d, poly: tri.to_vec(), contents: CONTENTS_SOLID, is_disp: true });
