@@ -127,3 +127,46 @@ pub fn extract(bsp: &mut Bsp) -> Result<(Vec<Prop>, PropStats), String> {
 
     Ok((out, PropStats { dict_entries, prop_entries, solid_props, lump_version: version, entry_size }))
 }
+
+// ---------------------------------------------------------------- model hulls
+
+/// studiohdr_t: "IDST", version, checksum, name[64], dataLength, eyeposition, illumposition,
+/// then hull_min at 104 and hull_max at 116. That box is the model's collision extent, which
+/// for the beams and slabs props are usually made of is very close to the real `.phy` hull.
+const MDL_HULL_MIN: usize = 104;
+const MDL_HULL_MAX: usize = 116;
+
+pub fn model_hull(vpks: &[crate::vpk::Vpk], model: &str) -> Option<([f64; 3], [f64; 3])> {
+    let head = vpks.iter().find_map(|v| v.read_prefix(model, 160))?;
+    if head.len() < MDL_HULL_MAX + 12 || &head[0..4] != b"IDST" { return None; }
+    let g = |o: usize| -> [f64; 3] {
+        [crate::bsp::f32le(&head, o) as f64, crate::bsp::f32le(&head, o + 4) as f64,
+         crate::bsp::f32le(&head, o + 8) as f64]
+    };
+    let (lo, hi) = (g(MDL_HULL_MIN), g(MDL_HULL_MAX));
+    // a zero or inverted box means the model has no usable extent
+    if (0..3).any(|k| !(hi[k] > lo[k])) { return None; }
+    Some((lo, hi))
+}
+
+/// A prop's collision box placed in the world.
+///
+/// The hull is axis-aligned in model space, so yaw has to be applied and the result re-boxed.
+/// That over-estimates a rotated non-square prop, which is the right way to be wrong here: it
+/// is better to offer a spot that turns out to be an inch off than to hide it entirely.
+pub fn world_box(prop: &Prop, lo: [f64; 3], hi: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    let yaw = prop.angles[1].to_radians();
+    let (s, c) = (yaw.sin(), yaw.cos());
+    let (mut wlo, mut whi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for &x in &[lo[0], hi[0]] {
+        for &y in &[lo[1], hi[1]] {
+            let rx = x * c - y * s;
+            let ry = x * s + y * c;
+            wlo[0] = wlo[0].min(rx); whi[0] = whi[0].max(rx);
+            wlo[1] = wlo[1].min(ry); whi[1] = whi[1].max(ry);
+        }
+    }
+    wlo[2] = lo[2]; whi[2] = hi[2];
+    for k in 0..3 { wlo[k] += prop.origin[k]; whi[k] += prop.origin[k]; }
+    (wlo, whi)
+}

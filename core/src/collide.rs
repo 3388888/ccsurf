@@ -81,6 +81,8 @@ pub struct Stats {
     pub up_faces: usize, pub disp_faces: usize,
     pub degenerate: usize, pub bevel_skipped: usize, pub bevel_fallback: usize,
     pub unbounded: usize, pub moving_brush_ents: usize,
+    /// Props turned into standable top faces, and those whose .mdl hull could not be read.
+    pub prop_faces: usize, pub props_placed: usize, pub props_no_hull: usize,
 }
 
 pub struct Geometry {
@@ -96,7 +98,8 @@ pub struct Geometry {
     /// use this, never `bounds`.
     pub play: Option<(P3, P3)>,
     pub stats: Stats,
-    /// Always false: .phy collision is not implemented. Surfaced so scans can report it.
+    /// True once prop boxes have been folded in. They are bounding-box approximations of the
+    /// real .phy hulls, not the hulls themselves — scans should say so.
     pub props_scanned: bool,
 }
 
@@ -297,6 +300,45 @@ pub fn extract(path: &Path) -> Result<Geometry, String> {
         }
     }
 
+    // ---- static props
+    //
+    // Props are the geometry a brush-only scanner cannot see, and on prop-heavy maps that is
+    // most of the interesting surfaces. The true hull is a convex decomposition in a .phy
+    // file; what we use is the model's bounding box from its .mdl header. For the beams,
+    // slabs and crates people actually stand on that is very close, and for a curved prop it
+    // over-estimates — which is the right way to be wrong, since a slightly-off spot you can
+    // go and check beats a spot that was never mentioned.
+    let mut prop_faces = 0usize;
+    let mut props_placed = 0usize;
+    let mut props_no_hull = 0usize;
+    if let Some(maps_dir) = path.parent() {
+        let archives: Vec<crate::vpk::Vpk> = crate::vpk::find_archives(maps_dir)
+            .into_iter().filter_map(|p| crate::vpk::Vpk::open(&p).ok()).collect();
+        if !archives.is_empty() {
+            if let Ok((props, _)) = crate::props::extract(&mut bsp) {
+                let mut hull_cache: std::collections::HashMap<String, Option<([f64;3],[f64;3])>> =
+                    std::collections::HashMap::new();
+                for pr in &props {
+                    if !pr.is_solid() { continue; }
+                    let hull = hull_cache.entry(pr.model.clone())
+                        .or_insert_with(|| crate::props::model_hull(&archives, &pr.model));
+                    let Some((lo, hi)) = *hull else { props_no_hull += 1; continue };
+                    let (wlo, whi) = crate::props::world_box(pr, lo, hi);
+                    props_placed += 1;
+                    solids.push(Aabb { min: wlo, max: whi, contents: CONTENTS_SOLID });
+                    for k in 0..3 { bmin[k] = bmin[k].min(wlo[k]); bmax[k] = bmax[k].max(whi[k]); }
+                    // only the top face can be stood on
+                    faces.push(Face {
+                        n: [0.0, 0.0, 1.0], d: whi[2], contents: CONTENTS_SOLID, is_disp: false,
+                        poly: vec![[wlo[0], wlo[1], whi[2]], [whi[0], wlo[1], whi[2]],
+                                   [whi[0], whi[1], whi[2]], [wlo[0], whi[1], whi[2]]],
+                    });
+                    prop_faces += 1;
+                }
+            }
+        }
+    }
+
     let disp = extract_displacements(&mut bsp, MIN_AREA)?;
     stats.disp_faces = disp.len();
     for f in disp {
@@ -304,6 +346,9 @@ pub fn extract(path: &Path) -> Result<Geometry, String> {
         faces.push(f);
     }
     stats.up_faces = faces.len();
+    stats.prop_faces = prop_faces;
+    stats.props_placed = props_placed;
+    stats.props_no_hull = props_no_hull;
 
     let play = if spawns.is_empty() { None } else {
         let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
@@ -313,7 +358,7 @@ pub fn extract(path: &Path) -> Result<Geometry, String> {
 
     let name = path.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
     Ok(Geometry { name, version, faces, solids, spawns, bounds: (bmin, bmax), play, stats,
-        props_scanned: false })
+        props_scanned: prop_faces > 0 })
 }
 
 /// Displacement surfaces at FULL tessellation. A drawing-oriented reader caps this (bspgeo.js

@@ -18,6 +18,7 @@ pub mod maps;
 pub mod props;
 pub mod render;
 pub mod spots;
+pub mod vpk;
 
 use spots::{Kind, ScanOptions};
 
