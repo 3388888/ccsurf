@@ -156,13 +156,28 @@ fn face_bounds2(f: &Face) -> ([f64; 2], [f64; 2]) {
     (lo, hi)
 }
 
+/// Terrain triangles are merged if their footprints touch and their heights agree to this
+/// much. Displacements are a continuous surface, so neighbours are the same walkable ground
+/// even where the slope changes between them.
+const DISP_Z_TOL: f64 = 24.0;
+
 pub fn merge_patches(faces: &[Face]) -> Vec<Patch> {
-    // bucket by quantised plane so only genuinely coplanar faces are ever compared
     use std::collections::HashMap;
     let mut groups: HashMap<(i64, i64, i64, i64), Vec<u32>> = HashMap::new();
     for (i, f) in faces.iter().enumerate() {
-        let key = ((f.n[0] / PLANE_EPS_N).round() as i64, (f.n[1] / PLANE_EPS_N).round() as i64,
-                   (f.n[2] / PLANE_EPS_N).round() as i64, (f.d / PLANE_EPS_D).round() as i64);
+        // Displacements get ONE bucket per standable class rather than one per plane.
+        //
+        // Terrain is a curved mesh: every triangle has a slightly different normal, so plane
+        // bucketing puts each in its own group, nothing ever merges, and a lone 24u terrain
+        // triangle gets classified as a narrow ledge. On cs_italy that produced 616 bogus
+        // "pixelwalks" out of 684 — the open ground you walk across every round.
+        let key = if f.is_disp {
+            let standable = f.n[2] >= STANDABLE_NORMAL_Z;
+            (i64::MIN, if standable { 1 } else { 0 }, 0, 0)
+        } else {
+            ((f.n[0] / PLANE_EPS_N).round() as i64, (f.n[1] / PLANE_EPS_N).round() as i64,
+             (f.n[2] / PLANE_EPS_N).round() as i64, (f.d / PLANE_EPS_D).round() as i64)
+        };
         groups.entry(key).or_default().push(i as u32);
     }
 
@@ -188,7 +203,18 @@ pub fn merge_patches(faces: &[Face]) -> Vec<Patch> {
                     let (lb, hb) = bounds[ib];
                     let touch = la[0] <= hb[0] + TOUCH_EPS && lb[0] <= ha[0] + TOUCH_EPS
                              && la[1] <= hb[1] + TOUCH_EPS && lb[1] <= ha[1] + TOUCH_EPS;
-                    if touch { dsu.union(cand[a], cand[b]); }
+                    if !touch { continue; }
+                    // Coplanar faces share a plane, so a footprint overlap is enough. Terrain
+                    // does not: without a height check a hillside would weld to the valley
+                    // floor it overhangs, merging separate ground into one patch.
+                    let fa = &faces[members[ia] as usize];
+                    let fb = &faces[members[ib] as usize];
+                    if fa.is_disp || fb.is_disp {
+                        let za = fa.centroid()[2];
+                        let zb = fb.centroid()[2];
+                        if (za - zb).abs() > DISP_Z_TOL { continue; }
+                    }
+                    dsu.union(cand[a], cand[b]);
                 }
             }
         }
