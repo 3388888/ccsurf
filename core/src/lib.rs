@@ -15,6 +15,7 @@ pub mod collide;
 pub mod consts;
 pub mod jumptable;
 pub mod maps;
+pub mod props;
 pub mod render;
 pub mod spots;
 

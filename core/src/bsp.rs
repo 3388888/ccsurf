@@ -57,6 +57,12 @@ impl Bsp {
         Ok(Bsp { file, lumps, version })
     }
 
+    /// Byte offset of a lump in the file. Needed because game-lump sub-offsets are absolute
+    /// in most maps but relative in a few.
+    pub fn lump_offset(&self, index: usize) -> usize {
+        self.lumps.get(index).map(|l| l.ofs.max(0) as usize).unwrap_or(0)
+    }
+
     pub fn read(&mut self, index: usize) -> Result<Vec<u8>, String> {
         let l = match self.lumps.get(index) { Some(l) => *l, None => return Ok(Vec::new()) };
         if l.len <= 0 || l.ofs < 0 { return Ok(Vec::new()); }

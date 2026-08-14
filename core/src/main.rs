@@ -139,6 +139,38 @@ fn main() {
             }
         }
 
+        "props" => {
+            let Some(name) = args.get(1).filter(|s| !s.starts_with("--")) else { usage() };
+            let dirs = maps::map_dirs();
+            let Some(path) = maps::find_bsp(name, &dirs) else {
+                eprintln!("map \"{name}\" not found"); std::process::exit(1);
+            };
+            let mut bsp = match pixelsurf_core::bsp::Bsp::open(&path) {
+                Ok(b) => b, Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
+            };
+            let (props, st) = match pixelsurf_core::props::extract(&mut bsp) {
+                Ok(v) => v, Err(e) => { eprintln!("error: {e}"); std::process::exit(1); }
+            };
+            println!("{name}: {} props ({} solid), {} distinct models, sprp v{}, {}B/entry",
+                st.prop_entries, st.solid_props, st.dict_entries, st.lump_version, st.entry_size);
+            // --near X Y Z [R]: what props sit around a coordinate
+            if let Some(i) = args.iter().position(|a| a == "--near") {
+                let g = |k: usize| args.get(i + k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                let (x, y, z) = (g(1), g(2), g(3));
+                let r = args.get(i + 4).and_then(|v| v.parse::<f64>().ok()).unwrap_or(256.0);
+                let mut near: Vec<_> = props.iter()
+                    .map(|p| (((p.origin[0]-x).powi(2) + (p.origin[1]-y).powi(2) + (p.origin[2]-z).powi(2)).sqrt(), p))
+                    .filter(|(d, _)| *d <= r).collect();
+                near.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                println!("
+{} props within {r:.0}u of ({x:.0} {y:.0} {z:.0}):", near.len());
+                for (d, p) in near.iter().take(25) {
+                    println!("  {:>7.1}u  {:>9.1} {:>9.1} {:>9.1}  solid={}  {}",
+                        d, p.origin[0], p.origin[1], p.origin[2], p.solid, p.model);
+                }
+            }
+        }
+
         "clear-cache" => {
             match maps::clear_cache() {
                 Ok(()) => println!("cache cleared ({})", maps::cache_dir().display()),
