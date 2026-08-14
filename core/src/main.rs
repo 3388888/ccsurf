@@ -170,7 +170,7 @@ fn print_scan(name: &str, opts: &ScanOptions, force: bool, top: usize) {
     println!("  {}", path.display());
     println!("  pixelsurf {}   pixelwalk {}   surf {}   out-of-bounds {}",
         count(Kind::PixelSurf), count(Kind::PixelWalk), count(Kind::Surf), oob.len());
-    println!("  rejected {} surfaces where no player hull fits (wall or ceiling in the way)", res.blocked);
+    println!("  rejected {} surfaces where no player hull fits, {} slivers as compiler seams", res.blocked, res.seams);
     println!("  NOT SCANNED: static prop collision (.phy) — spots on crates, awnings and pipes are missing.");
 
     if !oob.is_empty() {

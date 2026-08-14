@@ -20,6 +20,9 @@ use crate::jumptable;
 
 /// Narrower than this and the engine won't hand you ground — you perch instead of standing.
 const PIXEL_SLIVER: f64 = 2.0;
+/// ...but only if it is short as well. Beyond this it is a ledge or a run of trim, which you
+/// walk along rather than balance on, and there is nothing to hunt for.
+const PERCH_MAX_LEN: f64 = 48.0;
 /// Ledges wider than the hull are ordinary floor.
 const HULL_WIDTH: f64 = HULL_W;
 /// A surf ramp needs to be big enough to actually ride.
@@ -135,6 +138,10 @@ pub struct Patch {
 
 impl Patch {
     pub fn min_width(&self) -> f64 { (self.max[0] - self.min[0]).min(self.max[1] - self.min[1]) }
+    /// Longest horizontal extent. A perch is small in BOTH directions; a 1u lip running 230u
+    /// along a wall is trim, and looks identical to a pixel surf if you only measure the
+    /// narrow side.
+    pub fn max_width(&self) -> f64 { (self.max[0] - self.min[0]).max(self.max[1] - self.min[1]) }
 }
 
 struct Dsu(Vec<u32>);
@@ -255,7 +262,10 @@ pub fn merge_patches(faces: &[Face]) -> Vec<Patch> {
 pub fn classify_patch(p: &Patch) -> Kind {
     if p.n[2] >= STANDABLE_NORMAL_Z {
         let w = p.min_width();
-        if w < PIXEL_SLIVER { Kind::PixelSurf }
+        // A pixel surf is a POINT you perch on, so it has to be small both ways. Testing only
+        // the narrow side made every strip of moulding qualify: on de_seaside all eight
+        // "pixelsurfs" were one 1u lip, 230u long, repeated at z=207 around the map.
+        if w < PIXEL_SLIVER && p.max_width() <= PERCH_MAX_LEN { Kind::PixelSurf }
         else if w < HULL_WIDTH { Kind::PixelWalk }
         else { Kind::Ground }
     } else {
@@ -395,6 +405,8 @@ pub struct ScanResult {
     /// Candidates rejected because no player hull fits — reported so the filtering is
     /// auditable rather than silently swallowing surfaces.
     pub blocked: usize,
+    /// Slivers rejected as compiler seams rather than perches.
+    pub seams: usize,
 }
 
 pub fn scan(geo: &Geometry, opts: &ScanOptions) -> ScanResult {
@@ -449,6 +461,35 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> ScanResult {
         }
     }
 
+    // ---- seam rejection
+    //
+    // A 1-unit sliver flush against a bigger surface at the same height is not a perch, it is
+    // a compiler seam: two brushes whose tops differ by a hair bucket into separate patches
+    // and the thinner one looks like a pixel surf. On de_seaside this produced eight
+    // "pixelsurfs" all at exactly z=207.0 and width 1.0u, scattered across the map — one
+    // piece of trim, counted eight times.
+    //
+    // What makes a sliver real is air beside it. So: if a proper surface sits within a couple
+    // of units horizontally at essentially the same height, this is a seam in that surface.
+    const SEAM_XY: f64 = 20.0;      // how close the neighbour has to be
+    const SEAM_Z: f64 = 4.0;        // how closely their heights must agree
+    const SEAM_REAL_WIDTH: f64 = 8.0;   // a neighbour this wide is a genuine surface
+    let mut seam = vec![false; n];
+    for i in 0..n {
+        if kinds[i] != Kind::PixelSurf { continue; }
+        let c = centroids[i];
+        grid.near(c[0], c[1], SEAM_XY, &mut scratch);
+        for &j in &scratch {
+            let j = j as usize;
+            if j == i { continue; }
+            if patches[j].n[2] < STANDABLE_NORMAL_Z { continue; }
+            if patches[j].min_width() < SEAM_REAL_WIDTH { continue; }
+            if (centroids[j][2] - c[2]).abs() > SEAM_Z { continue; }
+            let d2 = (centroids[j][0] - c[0]).powi(2) + (centroids[j][1] - c[1]).powi(2);
+            if d2 <= SEAM_XY * SEAM_XY { seam[i] = true; break; }
+        }
+    }
+
     // ---- isolation test
     //
     // A narrow ledge flush with ordinary floor is not a spot, it is trim: window sills, step
@@ -471,7 +512,7 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> ScanResult {
 
     // ---- highest reachable surface beneath each face, for ranking the out-of-bounds ones
     let solid_grid = SolidGrid::build(&geo.solids, 256.0);
-    let mut blocked = 0usize;
+    let (mut blocked, mut seams) = (0usize, 0usize);
     let mut out = Vec::new();
     let mut below: Vec<u32> = Vec::new();
     for i in 0..n {
@@ -479,6 +520,7 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> ScanResult {
         if kind == Kind::Ground && !opts.include_ground { continue; }
         if kind == Kind::Surf && (!opts.include_surf || patches[i].area < MIN_SURF_AREA) { continue; }
         if trim[i] && !opts.include_trim { continue; }
+        if seam[i] { seams += 1; continue; }
 
         // Can a player actually stand here? A ledge with a wall or ceiling over it is not a
         // spot no matter how inviting the surface looks. Surf ramps are exempt: you ride
@@ -547,7 +589,7 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> ScanResult {
             .then(b.height_above_reachable.partial_cmp(&a.height_above_reachable).unwrap())
             .then(a.width.partial_cmp(&b.width).unwrap())
     });
-    ScanResult { spots: out, blocked }
+    ScanResult { spots: out, blocked, seams }
 }
 
 #[cfg(test)]
