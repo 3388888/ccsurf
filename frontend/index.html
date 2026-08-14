@@ -10,6 +10,7 @@
   <div class="brand">Pixelsurf <span>Calc</span></div>
   <nav>
     <button class="tab active" data-tab="spots">Map scan</button>
+    <button class="tab" data-tab="view">3D view</button>
     <button class="tab" data-tab="calc">Calculator</button>
   </nav>
 </header>
@@ -57,6 +58,20 @@
   <div id="more" class="more hidden"></div>
 </section>
 
+<!-- ------------------------------------------------------------------- 3D view -->
+<section id="tab-view" class="tab-panel">
+  <div id="v3dwrap">
+    <canvas id="v3d"></canvas>
+    <div id="v3dhud"><span id="v3dtri" class="muted"></span><div id="v3dpos" class="muted"></div></div>
+    <div id="v3dside">
+      <div id="v3dfilters"></div>
+      <div id="v3dlist"></div>
+    </div>
+    <div id="v3dhelp"><kbd>click</kbd> look &nbsp;<kbd>WASD</kbd> move &nbsp;<kbd>Space</kbd>/<kbd>Ctrl</kbd> up/down &nbsp;<kbd>Shift</kbd> fast &nbsp;<kbd>Esc</kbd> release</div>
+  </div>
+  <div id="v3dempty" class="status">Scan a map first, then this shows it in 3D with the spots glowing.</div>
+</section>
+
 <!-- ----------------------------------------------------------------- calculator -->
 <section id="tab-calc" class="tab-panel">
   <div class="bar">
@@ -83,6 +98,7 @@
 </section>
 
 <script src="jumptable.js"></script>
+<script src="view3d.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

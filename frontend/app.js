@@ -57,6 +57,7 @@ async function doScan(force) {
       force: !!force,
     });
     scanned = JSON.parse(json);
+    if (typeof meshMap !== "undefined" && meshMap !== scanned.map) meshMap = null;
     filter = "all";
     render();
   } catch (e) {
@@ -163,3 +164,78 @@ for (const id of ["ledge", "lo", "hi", "tick", "players"]) {
 
 renderCalc();
 loadMaps();
+
+// ---------------------------------------------------------------- 3D view tab
+//
+// The mesh is fetched lazily and only when the map changes: it is a few hundred KB and the
+// scan result alone is what most of the app needs.
+let meshMap = null;   // which map is currently uploaded to the GPU
+
+async function showView3D() {
+  const wrap = $("v3dwrap"), empty = $("v3dempty");
+  if (!scanned) {
+    wrap.classList.remove("on");
+    empty.textContent = "Scan a map first, then this shows it in 3D with the spots glowing.";
+    empty.classList.remove("hidden");
+    return;
+  }
+  if (meshMap === scanned.map) { wrap.classList.add("on"); empty.classList.add("hidden"); return; }
+
+  empty.textContent = `Loading ${scanned.map} geometry…`;
+  empty.classList.remove("hidden");
+  wrap.classList.remove("on");
+  try {
+    const geo = await invoke("map_mesh", { map: scanned.map });
+    const ok = View3D.load($("v3d"), geo, scanned.spots, null);
+    if (!ok) { empty.textContent = "WebGL is unavailable in this webview."; return; }
+    meshMap = scanned.map;
+    $("v3dtri").textContent = `${scanned.map} — ${View3D.triCount.toLocaleString()} tris`;
+    View3D.onFrame = (cam) => {
+      $("v3dpos").textContent =
+        `setpos ${cam.pos[0].toFixed(0)} ${cam.pos[1].toFixed(0)} ${cam.pos[2].toFixed(0)}`;
+    };
+    buildView3DPanel();
+    wrap.classList.add("on");
+    empty.classList.add("hidden");
+  } catch (e) {
+    empty.textContent = String(e);
+  }
+}
+
+function buildView3DPanel() {
+  const KINDS = ["all", "oob", "pixelsurf", "pixelwalk", "surf"];
+  const count = (k) => k === "all" ? scanned.spots.length
+    : k === "oob" ? scanned.spots.filter((s) => !s.reachable).length
+    : scanned.spots.filter((s) => s.kind === k).length;
+  const pred = (k) => k === "all" ? null
+    : k === "oob" ? ((s) => !s.reachable) : ((s) => s.kind === k);
+
+  $("v3dfilters").innerHTML = KINDS.map((k) =>
+    `<button data-k="${k}" class="${k === "all" ? "on" : ""}">${k} ${count(k)}</button>`).join("");
+  [...$("v3dfilters").querySelectorAll("button")].forEach((b) => b.addEventListener("click", () => {
+    $("v3dfilters").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    View3D.setFilter(pred(b.dataset.k));
+    renderView3DList();
+  }));
+  renderView3DList();
+}
+
+function renderView3DList() {
+  const list = $("v3dlist"), vis = View3D.visible;
+  list.innerHTML = vis.slice(0, 400).map((s, i) =>
+    `<div class="sp" data-i="${i}">
+       <span class="k ${s.reachable ? "kind-" + s.kind : "oob"}">${s.kind}${s.reachable ? "" : " · OOB"}</span>
+       ${s.duckOnly ? '<span class="muted"> · crouch</span>' : ""}
+       <div class="muted">${s.x.toFixed(0)} ${s.y.toFixed(0)} ${s.z.toFixed(0)} · ${s.width.toFixed(1)}u${
+         s.heightAboveReachable != null ? ` · ${s.heightAboveReachable.toFixed(0)}u up` : ""}</div>
+     </div>`).join("") || '<div class="muted">nothing matches</div>';
+  [...list.querySelectorAll(".sp")].forEach((el) => el.addEventListener("click", () => {
+    [...list.querySelectorAll(".sp")].forEach((x) => x.classList.toggle("on", x === el));
+    View3D.select(vis[+el.dataset.i]);
+  }));
+}
+
+// hook the tab buttons: entering the 3D tab loads on demand
+for (const b of document.querySelectorAll(".tab")) {
+  if (b.dataset.tab === "view") b.addEventListener("click", showView3D);
+}

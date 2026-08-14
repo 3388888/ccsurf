@@ -34,6 +34,12 @@ fn scan(map: String, include_ground: bool, include_trim: bool, include_surf: boo
     scan_map(&map, &opts, force)
 }
 
+/// Render geometry for the 3D tab: base64 i16 triples, uploaded straight to WebGL.
+#[tauri::command]
+fn map_mesh(map: String) -> Result<String, String> {
+    pixelsurf_core::map_mesh(&map)
+}
+
 #[tauri::command]
 fn clear_cache() -> Result<String, String> {
     maps::clear_cache().map_err(|e| e.to_string())?;
@@ -97,7 +103,7 @@ fn main() {
     }
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_maps, map_folders, add_map_dir, scan, clear_cache])
+        .invoke_handler(tauri::generate_handler![list_maps, map_folders, add_map_dir, scan, map_mesh, clear_cache])
         .run(tauri::generate_context!())
         .expect("failed to start Pixelsurf Calc");
 }

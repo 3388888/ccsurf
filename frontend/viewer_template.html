@@ -8,8 +8,8 @@
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:#0b0c0e; color:#d6d9de; overflow:hidden;
     font:13px/1.5 "Segoe UI", system-ui, sans-serif; }
-  canvas { display:block; width:100%; height:100%; cursor:grab; }
-  canvas.locked { cursor:none; }
+  #c { display:block; width:100%; height:100%; cursor:grab; }
+  #c.locked { cursor:none; }
   #hud { position:fixed; top:0; left:0; padding:12px 16px; pointer-events:none;
     text-shadow:0 1px 3px #000; }
   #hud b { color:#d2952b; }
@@ -19,7 +19,7 @@
     cursor:pointer; font-family:var(--mono); font-size:11.5px; }
   .sp:hover { border-color:#d2952b; }
   .sp.on { border-color:#d2952b; background:#231d12; }
-  .sp .k { font-weight:600; }
+  .k { font-weight:600; }
   .pixelsurf { color:#ffb64a; } .pixelwalk { color:#6f9fd8; } .surf { color:#7fb069; }
   .oob { color:#e0645c; }
   .muted { color:var(--dim); }
@@ -36,251 +36,42 @@
 <body>
 <canvas id="c"></canvas>
 <div id="hud"><b>__MAP__</b> <span class="muted">— <span id="tri"></span> tris</span><div id="pos" class="muted"></div></div>
-<div id="panel">
-  <div id="filters"></div>
-  <div id="list"></div>
-</div>
+<div id="panel"><div id="filters"></div><div id="list"></div></div>
 <div id="help">
   <kbd>click</kbd> look &nbsp; <kbd>W A S D</kbd> move &nbsp; <kbd>Space</kbd>/<kbd>Ctrl</kbd> up/down &nbsp;
   <kbd>Shift</kbd> faster &nbsp; <kbd>Esc</kbd> release &nbsp; click a spot to fly to it
 </div>
 
+<script>__VIEW3D__</script>
 <script>
 "use strict";
-const MAP = "__MAP__";
-const GEO_B64 = "__GEO__";
 const SPOTS = __SPOTS__;
-
-// ---------------------------------------------------------------- decode geometry
-function b64ToBytes(b64) {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-const raw = b64ToBytes(GEO_B64);
-const posI16 = new Int16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2);
-const triCount = posI16.length / 9;
-document.getElementById("tri").textContent = triCount.toLocaleString();
-
-// Positions expand to float, and a flat normal is computed per triangle on the CPU. Doing it
-// here rather than in the shader keeps the shader trivial and works on WebGL1.
-const pos = new Float32Array(triCount * 9);
-const nrm = new Float32Array(triCount * 9);
-let bmin = [1e9, 1e9, 1e9], bmax = [-1e9, -1e9, -1e9];
-for (let t = 0; t < triCount; t++) {
-  const o = t * 9;
-  for (let k = 0; k < 9; k++) pos[o + k] = posI16[o + k];
-  const ax = pos[o], ay = pos[o+1], az = pos[o+2];
-  const bx = pos[o+3], by = pos[o+4], bz = pos[o+5];
-  const cx = pos[o+6], cy = pos[o+7], cz = pos[o+8];
-  const e1 = [bx-ax, by-ay, bz-az], e2 = [cx-ax, cy-ay, cz-az];
-  let nx = e1[1]*e2[2]-e1[2]*e2[1], ny = e1[2]*e2[0]-e1[0]*e2[2], nz = e1[0]*e2[1]-e1[1]*e2[0];
-  const l = Math.hypot(nx, ny, nz) || 1;
-  nx/=l; ny/=l; nz/=l;
-  for (let v = 0; v < 3; v++) { nrm[o+v*3]=nx; nrm[o+v*3+1]=ny; nrm[o+v*3+2]=nz; }
-  for (let v = 0; v < 3; v++) for (let k = 0; k < 3; k++) {
-    const val = pos[o+v*3+k];
-    if (val < bmin[k]) bmin[k] = val;
-    if (val > bmax[k]) bmax[k] = val;
-  }
-}
-const centre = [(bmin[0]+bmax[0])/2, (bmin[1]+bmax[1])/2, (bmin[2]+bmax[2])/2];
-
-// ---------------------------------------------------------------- gl setup
+const GEO_B64 = "__GEO__";
 const cv = document.getElementById("c");
-const gl = cv.getContext("webgl", { antialias: true, depth: true });
-if (!gl) { document.body.innerHTML = "<p style='padding:20px'>WebGL unavailable.</p>"; throw 0; }
 
-function sh(type, src) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src); gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
-  return s;
-}
-function prog(vs, fs) {
-  const p = gl.createProgram();
-  gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
-  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
-  return p;
+if (!View3D.load(cv, GEO_B64, SPOTS)) {
+  document.body.innerHTML = "<p style='padding:20px'>WebGL unavailable.</p>";
+} else {
+  document.getElementById("tri").textContent = View3D.triCount.toLocaleString();
+  View3D.onFrame = (cam) => {
+    document.getElementById("pos").textContent =
+      `setpos ${cam.pos[0].toFixed(0)} ${cam.pos[1].toFixed(0)} ${cam.pos[2].toFixed(0)}`;
+  };
 }
 
-// Matte geometry: no textures, no materials. Just a soft key light plus a little rim so
-// edges read, and fog so distance is legible.
-const mapProg = prog(`
-  attribute vec3 aPos; attribute vec3 aNrm;
-  uniform mat4 uMVP; varying vec3 vN; varying float vDepth;
-  void main(){ vN = aNrm; vec4 p = uMVP * vec4(aPos,1.0); vDepth = p.w; gl_Position = p; }`, `
-  precision mediump float;
-  varying vec3 vN; varying float vDepth;
-  uniform vec3 uEyeDir;
-  void main(){
-    vec3 n = normalize(vN);
-    float key  = max(dot(n, normalize(vec3(0.35,0.5,0.85))), 0.0);
-    float fill = max(dot(n, normalize(vec3(-0.5,-0.3,0.2))), 0.0);
-    float up   = max(n.z, 0.0);
-    float l = 0.055 + 0.42*key + 0.11*fill + 0.16*up;
-    float fog = clamp(vDepth / 9000.0, 0.0, 1.0);
-    vec3 col = mix(vec3(l), vec3(0.043,0.047,0.055), fog*0.85);
-    gl_FragColor = vec4(col, 1.0);
-  }`);
+const KINDS = ["all", "oob", "pixelsurf", "pixelwalk", "surf"];
+const count = (k) => k === "all" ? SPOTS.length
+  : k === "oob" ? SPOTS.filter(s => !s.reachable).length
+  : SPOTS.filter(s => s.kind === k).length;
+const pred = (k) => k === "all" ? null : k === "oob" ? (s => !s.reachable) : (s => s.kind === k);
 
-// Spots: emissive billboards that stay visible through geometry, so a spot behind a wall
-// still tells you where to go.
-const spotProg = prog(`
-  attribute vec2 aCorner; attribute vec3 aCentre; attribute vec3 aCol; attribute float aSize;
-  uniform mat4 uMVP; uniform vec3 uRight; uniform vec3 uUp;
-  varying vec2 vUV; varying vec3 vCol;
-  void main(){
-    vUV = aCorner; vCol = aCol;
-    vec3 w = aCentre + (uRight*aCorner.x + uUp*aCorner.y) * aSize;
-    gl_Position = uMVP * vec4(w,1.0);
-  }`, `
-  precision mediump float;
-  varying vec2 vUV; varying vec3 vCol;
-  void main(){
-    float d = length(vUV);
-    if (d > 1.0) discard;
-    float core = smoothstep(1.0, 0.0, d);
-    float glow = pow(core, 2.5);
-    gl_FragColor = vec4(vCol * (0.55 + glow*1.9), glow*0.92);
-  }`);
+document.getElementById("filters").innerHTML = KINDS.map(k =>
+  `<button data-k="${k}" class="${k === "all" ? "on" : ""}">${k} ${count(k)}</button>`).join("");
 
-function buf(data) {
-  const b = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, b);
-  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-  return b;
-}
-const bPos = buf(pos), bNrm = buf(nrm);
-
-const KIND_COL = { pixelsurf:[1.0,0.66,0.20], pixelwalk:[0.36,0.60,0.88],
-                   surf:[0.44,0.72,0.36], ground:[0.6,0.6,0.6] };
-const OOB_COL = [0.92,0.33,0.29];
-
-let visible = SPOTS.slice();
-let bCorner, bCentre, bCol, bSize, spotVerts = 0;
-function buildSpots() {
-  const n = visible.length;
-  const corner = new Float32Array(n*12), centre = new Float32Array(n*18);
-  const col = new Float32Array(n*18), size = new Float32Array(n*6);
-  const quad = [[-1,-1],[1,-1],[1,1],[-1,-1],[1,1],[-1,1]];
-  visible.forEach((s, i) => {
-    const c = s.reachable ? (KIND_COL[s.kind] || [1,1,1]) : OOB_COL;
-    for (let v = 0; v < 6; v++) {
-      corner[i*12+v*2] = quad[v][0]; corner[i*12+v*2+1] = quad[v][1];
-      centre[i*18+v*3] = s.x; centre[i*18+v*3+1] = s.y; centre[i*18+v*3+2] = s.z + 6;
-      col[i*18+v*3] = c[0]; col[i*18+v*3+1] = c[1]; col[i*18+v*3+2] = c[2];
-      size[i*6+v] = s === selected ? 34 : 20;
-    }
-  });
-  bCorner = buf(corner); bCentre = buf(centre); bCol = buf(col); bSize = buf(size);
-  spotVerts = n*6;
-}
-
-// ---------------------------------------------------------------- camera
-const cam = { pos:[centre[0], centre[1]-1200, centre[2]+500], yaw:Math.PI/2, pitch:-0.25, speed:900 };
-const keys = {};
-addEventListener("keydown", e => { keys[e.code]=1; if(e.code==="Escape") document.exitPointerLock(); });
-addEventListener("keyup",   e => { keys[e.code]=0; });
-cv.addEventListener("click", () => cv.requestPointerLock());
-document.addEventListener("pointerlockchange", () => cv.classList.toggle("locked", document.pointerLockElement===cv));
-addEventListener("mousemove", e => {
-  if (document.pointerLockElement !== cv) return;
-  cam.yaw -= e.movementX*0.0022;
-  cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch - e.movementY*0.0022));
-});
-
-function fwd(){ const cp=Math.cos(cam.pitch); return [Math.cos(cam.yaw)*cp, Math.sin(cam.yaw)*cp, Math.sin(cam.pitch)]; }
-function mul(a,b){ const o=new Float32Array(16);
-  for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+j]*b[i*4+k];o[i*4+j]=s;} return o; }
-function persp(f,asp,n,fa){ const t=1/Math.tan(f/2); return new Float32Array([t/asp,0,0,0, 0,t,0,0, 0,0,(fa+n)/(n-fa),-1, 0,0,2*fa*n/(n-fa),0]); }
-function lookAt(e,c,u){
-  const f=[c[0]-e[0],c[1]-e[1],c[2]-e[2]]; let l=Math.hypot(...f); f[0]/=l;f[1]/=l;f[2]/=l;
-  let s=[f[1]*u[2]-f[2]*u[1], f[2]*u[0]-f[0]*u[2], f[0]*u[1]-f[1]*u[0]];
-  l=Math.hypot(...s)||1; s=[s[0]/l,s[1]/l,s[2]/l];
-  const v=[s[1]*f[2]-s[2]*f[1], s[2]*f[0]-s[0]*f[2], s[0]*f[1]-s[1]*f[0]];
-  return new Float32Array([s[0],v[0],-f[0],0, s[1],v[1],-f[1],0, s[2],v[2],-f[2],0,
-    -(s[0]*e[0]+s[1]*e[1]+s[2]*e[2]), -(v[0]*e[0]+v[1]*e[1]+v[2]*e[2]), f[0]*e[0]+f[1]*e[1]+f[2]*e[2], 1]);
-}
-
-let flyTo = null;
-function focus(s) {
-  const d = fwd();
-  flyTo = { pos:[s.x - d[0]*260, s.y - d[1]*260, s.z + 110], t:0 };
-}
-
-let last = performance.now();
-function frame(now) {
-  const dt = Math.min((now-last)/1000, 0.1); last = now;
-  const d = fwd();
-  const right = [Math.cos(cam.yaw-Math.PI/2), Math.sin(cam.yaw-Math.PI/2), 0];
-  let sp = cam.speed * (keys.ShiftLeft||keys.ShiftRight ? 3.4 : 1) * dt;
-  const step = (v,m) => { cam.pos[0]+=v[0]*m; cam.pos[1]+=v[1]*m; cam.pos[2]+=v[2]*m; };
-  if (keys.KeyW) step(d, sp);
-  if (keys.KeyS) step(d, -sp);
-  if (keys.KeyD) step(right, sp);
-  if (keys.KeyA) step(right, -sp);
-  if (keys.Space) cam.pos[2] += sp;
-  if (keys.ControlLeft||keys.ControlRight) cam.pos[2] -= sp;
-  if (flyTo) {
-    flyTo.t = Math.min(1, flyTo.t + dt*2.6);
-    const k = 1-Math.pow(1-flyTo.t, 3);
-    for (let i=0;i<3;i++) cam.pos[i] += (flyTo.pos[i]-cam.pos[i]) * k * 0.35;
-    if (flyTo.t >= 1) flyTo = null;
-  }
-
-  const w = cv.clientWidth, h = cv.clientHeight;
-  const dpr = Math.min(devicePixelRatio||1, 2);
-  if (cv.width !== w*dpr || cv.height !== h*dpr) { cv.width = w*dpr; cv.height = h*dpr; }
-  gl.viewport(0,0,cv.width,cv.height);
-  gl.clearColor(0.043,0.047,0.055,1);
-  gl.enable(gl.DEPTH_TEST);
-  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
-
-  const tgt = [cam.pos[0]+d[0], cam.pos[1]+d[1], cam.pos[2]+d[2]];
-  const mvp = mul(persp(1.15, w/h, 8, 40000), lookAt(cam.pos, tgt, [0,0,1]));
-
-  gl.useProgram(mapProg);
-  gl.uniformMatrix4fv(gl.getUniformLocation(mapProg,"uMVP"), false, mvp);
-  const ap = gl.getAttribLocation(mapProg,"aPos"), an = gl.getAttribLocation(mapProg,"aNrm");
-  gl.bindBuffer(gl.ARRAY_BUFFER,bPos); gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap,3,gl.FLOAT,false,0,0);
-  gl.bindBuffer(gl.ARRAY_BUFFER,bNrm); gl.enableVertexAttribArray(an); gl.vertexAttribPointer(an,3,gl.FLOAT,false,0,0);
-  gl.drawArrays(gl.TRIANGLES, 0, triCount*3);
-
-  if (spotVerts) {
-    gl.useProgram(spotProg);
-    gl.uniformMatrix4fv(gl.getUniformLocation(spotProg,"uMVP"), false, mvp);
-    const rt = [Math.cos(cam.yaw-Math.PI/2), Math.sin(cam.yaw-Math.PI/2), 0];
-    const upv = [-d[0]*Math.sin(cam.pitch), -d[1]*Math.sin(cam.pitch), Math.cos(cam.pitch)];
-    gl.uniform3fv(gl.getUniformLocation(spotProg,"uRight"), rt);
-    gl.uniform3fv(gl.getUniformLocation(spotProg,"uUp"), upv);
-    const bind = (name,b,n) => { const a=gl.getAttribLocation(spotProg,name);
-      gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a,n,gl.FLOAT,false,0,0); };
-    bind("aCorner",bCorner,2); bind("aCentre",bCentre,3); bind("aCol",bCol,3); bind("aSize",bSize,1);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-    gl.depthMask(false); gl.disable(gl.DEPTH_TEST);   // glow through walls
-    gl.drawArrays(gl.TRIANGLES, 0, spotVerts);
-    gl.depthMask(true); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
-  }
-
-  document.getElementById("pos").textContent =
-    `setpos ${cam.pos[0].toFixed(0)} ${cam.pos[1].toFixed(0)} ${cam.pos[2].toFixed(0)}`;
-  requestAnimationFrame(frame);
-}
-
-// ---------------------------------------------------------------- panel
-let selected = null;
-const KINDS = ["all","oob","pixelsurf","pixelwalk","surf"];
-let filter = "all";
-function applyFilter() {
-  visible = SPOTS.filter(s =>
-    filter === "all" ? true : filter === "oob" ? !s.reachable : s.kind === filter);
-  buildSpots();
+function renderList() {
   const list = document.getElementById("list");
-  list.innerHTML = visible.slice(0, 400).map((s, i) =>
+  const vis = View3D.visible;
+  list.innerHTML = vis.slice(0, 400).map((s, i) =>
     `<div class="sp" data-i="${i}">
        <span class="k ${s.reachable ? s.kind : "oob"}">${s.kind}${s.reachable ? "" : " · OOB"}</span>
        ${s.duckOnly ? '<span class="muted"> · crouch</span>' : ""}
@@ -290,22 +81,16 @@ function applyFilter() {
          s.entries[0].jump != null ? `, ${s.entries[0].crouch ? "crouch " : ""}${s.entries[0].jump.toFixed(2)}u` : ""}</div>` : ""}
      </div>`).join("") || '<div class="muted">nothing matches</div>';
   [...list.querySelectorAll(".sp")].forEach(el => el.addEventListener("click", () => {
-    selected = visible[+el.dataset.i];
     [...list.querySelectorAll(".sp")].forEach(x => x.classList.toggle("on", x === el));
-    buildSpots(); focus(selected);
+    View3D.select(vis[+el.dataset.i]);
   }));
 }
-document.getElementById("filters").innerHTML = KINDS.map(k =>
-  `<button data-k="${k}" class="${k==="all"?"on":""}">${k} ${
-    k==="all"?SPOTS.length:k==="oob"?SPOTS.filter(s=>!s.reachable).length:SPOTS.filter(s=>s.kind===k).length}</button>`).join("");
 [...document.querySelectorAll("#filters button")].forEach(b => b.addEventListener("click", () => {
-  filter = b.dataset.k;
-  document.querySelectorAll("#filters button").forEach(x => x.classList.toggle("on", x===b));
-  applyFilter();
+  document.querySelectorAll("#filters button").forEach(x => x.classList.toggle("on", x === b));
+  View3D.setFilter(pred(b.dataset.k));
+  renderList();
 }));
-
-applyFilter();
-requestAnimationFrame(frame);
+renderList();
 </script>
 </body>
 </html>

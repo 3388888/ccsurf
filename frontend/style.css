@@ -75,3 +75,29 @@ tbody tr:hover { background:var(--panel); }
 .oob { color:var(--red); }
 .eye { color:var(--accent); }
 .dimtext { color:var(--dim); }
+
+/* ---------------------------------------------------------------- 3D view tab */
+#tab-view.active { display:flex; flex-direction:column; padding:0; height:calc(100vh - 53px); }
+#v3dwrap { position:relative; flex:1; min-height:0; display:none; }
+#v3dwrap.on { display:block; }
+#v3d { display:block; width:100%; height:100%; background:#0b0c0e; cursor:grab; }
+#v3d.locked { cursor:none; }
+#v3dhud { position:absolute; top:0; left:0; padding:10px 14px; pointer-events:none;
+  text-shadow:0 1px 3px #000; font-family:var(--mono); font-size:12px; }
+#v3dside { position:absolute; top:0; right:0; width:320px; height:100%; overflow-y:auto;
+  background:rgba(18,20,24,.94); border-left:1px solid var(--line); padding:10px; }
+#v3dhelp { position:absolute; bottom:0; left:0; padding:8px 14px; color:var(--dim);
+  font-size:11px; text-shadow:0 1px 3px #000; pointer-events:none; }
+#v3dfilters { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:9px; }
+#v3dfilters button { background:#1e2126; border:1px solid var(--line); color:var(--dim);
+  border-radius:14px; padding:3px 10px; font-size:11px; cursor:pointer; font-family:inherit; }
+#v3dfilters button.on { border-color:var(--accent); color:#fff; }
+.sp { padding:6px 8px; border:1px solid var(--line); border-radius:4px; margin-bottom:5px;
+  cursor:pointer; font-family:var(--mono); font-size:11px; }
+.sp:hover { border-color:var(--accent); }
+.sp.on { border-color:var(--accent); background:#231d12; }
+.k { font-weight:600; }
+.muted { color:var(--dim); }
+kbd { background:#22262c; border:1px solid #333; border-radius:3px; padding:0 4px;
+  font-family:var(--mono); font-size:10.5px; }
+#v3dempty { padding:20px; }

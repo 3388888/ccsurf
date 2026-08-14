@@ -137,8 +137,22 @@ pub fn build_viewer(name: &str, opts: &ScanOptions) -> Result<(String, usize, us
     };
 
     let html = include_str!("../../frontend/viewer_template.html")
+        .replace("__VIEW3D__", include_str!("../../frontend/view3d.js"))
         .replace("__MAP__", &maps::esc(name))
         .replace("__GEO__", &b64(&bytes))
         .replace("__SPOTS__", &spots_json);
     Ok((html, mesh.tri_count, res.spots.len()))
+}
+
+/// Render geometry for a map, base64 i16 triples — what the 3D view uploads to WebGL.
+/// Separate from `scan_map` because the mesh is big and only the 3D tab wants it.
+pub fn map_mesh(name: &str) -> Result<String, String> {
+    let dirs = maps::map_dirs();
+    let Some(path) = maps::find_bsp(name, &dirs) else {
+        return Err(format!("map \"{name}\" not found in any maps folder"));
+    };
+    let mesh = render::extract(&path)?;
+    let mut bytes = Vec::with_capacity(mesh.pos.len() * 2);
+    for v in &mesh.pos { bytes.extend_from_slice(&v.to_le_bytes()); }
+    Ok(b64(&bytes))
 }
