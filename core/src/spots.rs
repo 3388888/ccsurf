@@ -20,9 +20,10 @@ use crate::jumptable;
 
 /// Narrower than this and the engine won't hand you ground — you perch instead of standing.
 const PIXEL_SLIVER: f64 = 2.0;
-/// ...but only if it is short as well. Beyond this it is a ledge or a run of trim, which you
-/// walk along rather than balance on, and there is nothing to hunt for.
-const PERCH_MAX_LEN: f64 = 48.0;
+// NOTE: an earlier version also required a perch to be SHORT, on the theory that a long thin
+// strip is trim. That was wrong and it cost real spots: the known de_vertigo wall surf runs
+// roughly 480 units (y=185 down to y=-296 at x=-2203, z=11840). Length does not separate a
+// perch from moulding — exposure does, and the hull test below is what actually decides it.
 /// Ledges wider than the hull are ordinary floor.
 const HULL_WIDTH: f64 = HULL_W;
 /// A surf ramp needs to be big enough to actually ride.
@@ -266,10 +267,7 @@ pub fn merge_patches(faces: &[Face]) -> Vec<Patch> {
 pub fn classify_patch(p: &Patch) -> Kind {
     if p.n[2] >= STANDABLE_NORMAL_Z {
         let w = p.min_width();
-        // A pixel surf is a POINT you perch on, so it has to be small both ways. Testing only
-        // the narrow side made every strip of moulding qualify: on de_seaside all eight
-        // "pixelsurfs" were one 1u lip, 230u long, repeated at z=207 around the map.
-        if w < PIXEL_SLIVER && p.max_width() <= PERCH_MAX_LEN { Kind::PixelSurf }
+        if w < PIXEL_SLIVER { Kind::PixelSurf }
         else if w < HULL_WIDTH { Kind::PixelWalk }
         else { Kind::Ground }
     } else {
@@ -341,10 +339,29 @@ impl SolidGrid {
         true
     }
 
-    fn fit(&self, solids: &[crate::collide::Aabb], x: f64, y: f64, z: f64) -> Fit {
-        if self.clear(solids, x, y, z, HULL_H_STAND) { Fit::Standing }
-        else if self.clear(solids, x, y, z, HULL_H_DUCK) { Fit::DuckOnly }
-        else { Fit::Blocked }
+    /// Where a player can actually put their hull to use this surface, if anywhere.
+    ///
+    /// The centroid is the WRONG place to test on its own. Standing on a ledge against a wall
+    /// means your body hangs out over the drop — the hull centre sits off the ledge, not on
+    /// it. Testing only the centroid puts the hull inside the wall and rejects the spot; on
+    /// de_vertigo_2019 that discarded 546 surfaces, including a wall surf that is definitely
+    /// real. So sample outward from the patch and take the first position that clears.
+    fn fit_at(&self, solids: &[crate::collide::Aabb], x: f64, y: f64, z: f64) -> (Fit, [f64; 2]) {
+        const R: f64 = HULL_W / 2.0;      // how far the hull centre may sit off the surface
+        let mut offsets = vec![[0.0, 0.0]];
+        for &d in &[R * 0.5, R, R * 1.5] {
+            for &(dx, dy) in &[(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
+                               (0.7, 0.7), (-0.7, 0.7), (0.7, -0.7), (-0.7, -0.7)] {
+                offsets.push([dx * d, dy * d]);
+            }
+        }
+        for o in &offsets {
+            if self.clear(solids, x + o[0], y + o[1], z, HULL_H_STAND) { return (Fit::Standing, *o); }
+        }
+        for o in &offsets {
+            if self.clear(solids, x + o[0], y + o[1], z, HULL_H_DUCK) { return (Fit::DuckOnly, *o); }
+        }
+        (Fit::Blocked, [0.0, 0.0])
     }
 }
 
@@ -529,8 +546,9 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> ScanResult {
         // Can a player actually stand here? A ledge with a wall or ceiling over it is not a
         // spot no matter how inviting the surface looks. Surf ramps are exempt: you ride
         // those moving, not from a standing hull position.
-        let fit = if kind == Kind::Surf { Fit::Standing }
-                  else { solid_grid.fit(&geo.solids, centroids[i][0], centroids[i][1], centroids[i][2]) };
+        let (fit, hull_off) = if kind == Kind::Surf { (Fit::Standing, [0.0, 0.0]) }
+                  else { solid_grid.fit_at(&geo.solids, centroids[i][0], centroids[i][1], centroids[i][2]) };
+        let _ = hull_off;
         if fit == Fit::Blocked { blocked += 1; continue; }
 
         let f = &patches[i];
