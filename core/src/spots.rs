@@ -57,6 +57,10 @@ pub struct Spot {
     pub kind: Kind,
     /// Where to put your feet.
     pub pos: P3,
+    /// The patch's real footprint (minX, minY, maxX, maxY). The view draws this rather than a
+    /// dot: a spot is a surface with a shape, and a blob tells you nothing about where on it
+    /// to actually stand.
+    pub rect: [f64; 4],
     /// The cl_showpos z you will read once standing there.
     pub eye_z: f64,
     pub width: f64,
@@ -569,6 +573,7 @@ pub fn scan(geo: &Geometry, opts: &ScanOptions) -> ScanResult {
         out.push(Spot {
             kind,
             pos: c,
+            rect: [f.min[0], f.min[1], f.max[0], f.max[1]],
             eye_z: c[2] + EYE_STAND,
             width: f.min_width(),
             area: f.area,

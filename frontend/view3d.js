@@ -60,23 +60,26 @@ const View3D = (() => {
         float fog = clamp(vDepth / 9000.0, 0.0, 1.0);
         gl_FragColor = vec4(mix(vec3(l), vec3(0.043,0.047,0.055), fog*0.85), 1.0);
       }`);
-    // Spots draw with the depth test off so one behind a wall still shows where to go.
+    // Spots are drawn as the surface itself: a flat quad on the patch footprint, depth-tested
+    // so it is hidden by anything in front of it. A camera-facing billboard drawn through
+    // walls told you a spot existed somewhere in that direction, which is not the same as
+    // telling you where it is.
     spotProg = prog(`
-      attribute vec2 aCorner; attribute vec3 aCentre; attribute vec3 aCol; attribute float aSize;
-      uniform mat4 uMVP; uniform vec3 uRight; uniform vec3 uUp;
-      varying vec2 vUV; varying vec3 vCol;
-      void main(){
-        vUV = aCorner; vCol = aCol;
-        vec3 w = aCentre + (uRight*aCorner.x + uUp*aCorner.y) * aSize;
-        gl_Position = uMVP * vec4(w,1.0);
-      }`, `
+      attribute vec3 aPos; attribute vec2 aUV; attribute vec3 aCol; attribute float aSel;
+      uniform mat4 uMVP;
+      varying vec2 vUV; varying vec3 vCol; varying float vSel;
+      void main(){ vUV = aUV; vCol = aCol; vSel = aSel; gl_Position = uMVP * vec4(aPos,1.0); }`, `
       precision mediump float;
-      varying vec2 vUV; varying vec3 vCol;
+      varying vec2 vUV; varying vec3 vCol; varying float vSel;
+      uniform float uPulse;
       void main(){
-        float d = length(vUV);
-        if (d > 1.0) discard;
-        float glow = pow(smoothstep(1.0, 0.0, d), 2.5);
-        gl_FragColor = vec4(vCol * (0.55 + glow*1.9), glow*0.92);
+        // bright rim, softer fill — reads as an outlined patch rather than a blob
+        vec2 e = min(vUV, 1.0 - vUV);
+        float edge = min(e.x, e.y);
+        float rim  = 1.0 - smoothstep(0.0, 0.16, edge);
+        float fill = 0.22 + 0.30 * (1.0 - smoothstep(0.0, 0.5, edge));
+        float a = clamp(fill + rim * 0.85, 0.0, 1.0) * (0.62 + 0.38 * vSel * uPulse);
+        gl_FragColor = vec4(vCol * (0.85 + rim * 1.5 + vSel * 0.5), a);
       }`);
     wireInput();
     return true;
@@ -137,22 +140,36 @@ const View3D = (() => {
     bounds = { lo, hi };
   }
 
+  // Lift the quad just off the surface so it wins the depth test against the face it sits
+  // on, without floating visibly above it.
+  const SURF_LIFT = 0.6;
+  /// A 1u sliver would be invisible edge-on, so tiny patches get padded to a minimum.
+  const MIN_MARK = 6.0;
+
   function buildSpots() {
     const n = visible.length;
     if (!n) { spotVerts = 0; return; }
-    const corner = new Float32Array(n*12), centre = new Float32Array(n*18);
-    const col = new Float32Array(n*18), size = new Float32Array(n*6);
-    const quad = [[-1,-1],[1,-1],[1,1],[-1,-1],[1,1],[-1,1]];
+    const pos = new Float32Array(n*18), uv = new Float32Array(n*12);
+    const col = new Float32Array(n*18), sel = new Float32Array(n*6);
+    const quad = [[0,0],[1,0],[1,1],[0,0],[1,1],[0,1]];
     visible.forEach((s, i) => {
       const c = s.reachable ? (KIND_COL[s.kind] || [1,1,1]) : OOB_COL;
+      let [x0, y0, x1, y1] = s.rect || [s.x-8, s.y-8, s.x+8, s.y+8];
+      // pad so a hairline ledge is still clickable/visible from above
+      if (x1 - x0 < MIN_MARK) { const m = (x0+x1)/2; x0 = m - MIN_MARK/2; x1 = m + MIN_MARK/2; }
+      if (y1 - y0 < MIN_MARK) { const m = (y0+y1)/2; y0 = m - MIN_MARK/2; y1 = m + MIN_MARK/2; }
+      const z = s.z + SURF_LIFT;
       for (let v = 0; v < 6; v++) {
-        corner[i*12+v*2] = quad[v][0]; corner[i*12+v*2+1] = quad[v][1];
-        centre[i*18+v*3] = s.x; centre[i*18+v*3+1] = s.y; centre[i*18+v*3+2] = s.z + 6;
+        const u = quad[v];
+        pos[i*18+v*3]   = u[0] ? x1 : x0;
+        pos[i*18+v*3+1] = u[1] ? y1 : y0;
+        pos[i*18+v*3+2] = z;
+        uv[i*12+v*2] = u[0]; uv[i*12+v*2+1] = u[1];
         col[i*18+v*3] = c[0]; col[i*18+v*3+1] = c[1]; col[i*18+v*3+2] = c[2];
-        size[i*6+v] = (s === selected) ? 34 : 20;
+        sel[i*6+v] = (s === selected) ? 1 : 0;
       }
     });
-    bCorner = buf(corner); bCentre = buf(centre); bCol = buf(col); bSize = buf(size);
+    bCorner = buf(uv); bCentre = buf(pos); bCol = buf(col); bSize = buf(sel);
     spotVerts = n*6;
   }
 
@@ -217,16 +234,16 @@ const View3D = (() => {
     if (spotVerts) {
       gl.useProgram(spotProg);
       gl.uniformMatrix4fv(gl.getUniformLocation(spotProg,"uMVP"), false, mvp);
-      gl.uniform3fv(gl.getUniformLocation(spotProg,"uRight"), right);
-      gl.uniform3fv(gl.getUniformLocation(spotProg,"uUp"),
-        [-d[0]*Math.sin(cam.pitch), -d[1]*Math.sin(cam.pitch), Math.cos(cam.pitch)]);
+      gl.uniform1f(gl.getUniformLocation(spotProg,"uPulse"),
+        0.65 + 0.35*Math.sin(now/260));
       const bind = (name,b,n) => { const a=gl.getAttribLocation(spotProg,name);
         gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a,n,gl.FLOAT,false,0,0); };
-      bind("aCorner",bCorner,2); bind("aCentre",bCentre,3); bind("aCol",bCol,3); bind("aSize",bSize,1);
-      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-      gl.depthMask(false); gl.disable(gl.DEPTH_TEST);
+      bind("aUV",bCorner,2); bind("aPos",bCentre,3); bind("aCol",bCol,3); bind("aSel",bSize,1);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      // depth test ON: a marker behind a wall stays behind the wall
+      gl.depthMask(false);
       gl.drawArrays(gl.TRIANGLES, 0, spotVerts);
-      gl.depthMask(true); gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
+      gl.depthMask(true); gl.disable(gl.BLEND);
     }
 
     if (View3D.onFrame) View3D.onFrame(cam);

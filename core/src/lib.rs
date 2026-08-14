@@ -75,10 +75,12 @@ fn to_json(name: &str, geo: &collide::Geometry, found: &[spots::Spot], blocked: 
         if i > 0 { s.push(','); }
         s.push_str(&format!(
             "{{\"kind\":\"{}\",\"x\":{},\"y\":{},\"z\":{},\"eyeZ\":{},\"width\":{},\"area\":{},\
-             \"slopeDeg\":{},\"isClip\":{},\"isDisp\":{},\"duckOnly\":{},\"reachable\":{},\"heightAboveReachable\":{}",
+             \"rect\":[{},{},{},{}],\"slopeDeg\":{},\"isClip\":{},\"isDisp\":{},\"duckOnly\":{},\"reachable\":{},\"heightAboveReachable\":{}",
             sp.kind.as_str(),
             num(sp.pos[0], 2), num(sp.pos[1], 2), num(sp.pos[2], 2), num(sp.eye_z, 2),
-            num(sp.width, 2), num(sp.area, 1), num(sp.slope_deg, 1),
+            num(sp.width, 2), num(sp.area, 1),
+            num(sp.rect[0], 2), num(sp.rect[1], 2), num(sp.rect[2], 2), num(sp.rect[3], 2),
+            num(sp.slope_deg, 1),
             sp.is_clip, sp.is_disp, sp.duck_only, sp.reachable,
             if sp.height_above_reachable < 0.0 { "null".into() } else { num(sp.height_above_reachable, 1) }));
         if let Some(c) = sp.oob_class { s.push_str(&format!(",\"oobClass\":\"{c}\"")); }
